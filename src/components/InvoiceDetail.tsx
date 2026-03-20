@@ -29,9 +29,15 @@ export default function InvoiceDetail({ invoice, canApprove, onApprove, onClose 
           <div><span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Invoice #</span><p style={{ fontWeight: 600 }}>{invoice.invoiceNumber || '-'}</p></div>
           <div><span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Date</span><p style={{ fontWeight: 600 }}>{invoice.invoiceDate || '-'}</p></div>
           <div><span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Due Date</span><p style={{ fontWeight: 600 }}>{invoice.dueDate || '-'}</p></div>
-          <div><span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Subtotal</span><p style={{ fontWeight: 600 }}>{invoice.currency} {invoice.subtotal?.toLocaleString()}</p></div>
-          <div><span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Tax</span><p style={{ fontWeight: 600 }}>{invoice.currency} {invoice.tax?.toLocaleString()}</p></div>
-          <div><span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Total</span><p style={{ fontWeight: 700, fontSize: 20, color: 'var(--blue)' }}>{invoice.currency} {invoice.totalAmount?.toLocaleString()}</p></div>
+          <div><span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Subtotal</span><p style={{ fontWeight: 600 }}>₹{invoice.subtotal?.toLocaleString()}</p></div>
+          <div><span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Tax</span><p style={{ fontWeight: 600 }}>₹{invoice.tax?.toLocaleString()}</p></div>
+          <div>
+            <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Total (INR)</span>
+            <p style={{ fontWeight: 700, fontSize: 20, color: 'var(--blue)' }}>₹{invoice.totalAmount?.toLocaleString()}</p>
+            {invoice.originalCurrency && invoice.originalCurrency !== 'INR' && (
+              <p style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 2 }}>Originally: {invoice.originalCurrency} {invoice.originalAmount?.toLocaleString()}</p>
+            )}
+          </div>
           <div><span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Status</span><p><span className={`badge badge-${invoice.status}`}>{invoice.status}</span></p></div>
         </div>
 

@@ -148,7 +148,10 @@ app.post('/api/invoices/upload', auth, upload.single('invoice'), async (req, res
   "tags": [],
   "rawText": ""
 }
-IMPORTANT: ALL monetary values (totalAmount, subtotal, tax, lineItems amounts) MUST be converted to Indian Rupees (INR). If the invoice is in USD, EUR, GBP, AUD, SGD or any other currency, convert all amounts to INR using approximate current exchange rates. Set "currency" to "INR" always. Store the original currency in "originalCurrency" and original total in "originalAmount" for reference. If the invoice is already in INR, set originalCurrency to "INR" and originalAmount same as totalAmount.
+RULES:
+1. ALL monetary values (totalAmount, subtotal, tax, lineItems amounts) MUST be converted to Indian Rupees (INR). Use these approximate rates: 1 USD = 84 INR, 1 EUR = 91 INR, 1 GBP = 106 INR, 1 AUD = 55 INR, 1 SGD = 63 INR, 1 CAD = 61 INR, 1 AED = 23 INR, 1 JPY = 0.56 INR. Set "currency" to "INR" always. Store original currency in "originalCurrency" and original total in "originalAmount".
+2. AUTO-CATEGORIZE the invoice into ONE of these categories based on the content: "Office Supplies", "Software & SaaS", "Travel & Transport", "Food & Beverages", "Utilities", "Rent & Lease", "Professional Services", "Marketing & Advertising", "Equipment", "Maintenance & Repairs", "Insurance", "Telecommunications", "Raw Materials", "Logistics & Shipping", "Salary & Wages", "Medical & Healthcare", "Legal & Compliance", "Training & Education", "Miscellaneous". Pick the most appropriate one.
+3. Add relevant tags based on invoice content (e.g. vendor type, urgency, department).
 If a field is not found, use the default value. For rawText, include all readable text from the invoice.`,
     ]);
 
@@ -289,6 +292,22 @@ app.get('/api/stats', auth, adminOnly, async (req, res) => {
     { $limit: 12 },
   ]);
 
+  const byUser = await Invoice.aggregate([
+    { $group: { _id: '$uploadedByName', total: { $sum: '$totalAmount' }, count: { $sum: 1 }, approved: { $sum: { $cond: [{ $eq: ['$status', 'approved'] }, '$totalAmount', 0] } }, pending: { $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] } } } },
+    { $sort: { total: -1 } },
+  ]);
+
+  const byStatus = await Invoice.aggregate([
+    { $group: { _id: '$status', total: { $sum: '$totalAmount' }, count: { $sum: 1 } } },
+  ]);
+
+  const pendingAmount = await Invoice.aggregate([
+    { $match: { status: 'pending' } },
+    { $group: { _id: null, total: { $sum: '$totalAmount' } } },
+  ]);
+
+  const recentPending = await Invoice.find({ status: 'pending' }).sort({ createdAt: -1 }).limit(10);
+
   res.json({
     totalInvoices,
     pendingInvoices,
@@ -296,8 +315,12 @@ app.get('/api/stats', auth, adminOnly, async (req, res) => {
     rejectedInvoices,
     totalUsers,
     totalExpenses: totalExpenses[0]?.total || 0,
+    pendingAmount: pendingAmount[0]?.total || 0,
     byCategory,
     byMonth: byMonth.reverse(),
+    byUser,
+    byStatus,
+    recentPending,
   });
 });
 

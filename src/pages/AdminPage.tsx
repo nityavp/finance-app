@@ -101,37 +101,152 @@ export default function AdminPage() {
         {/* DASHBOARD */}
         {tab === 'dashboard' && stats && (
           <div>
+            {/* Stats Cards */}
             <div className="stat-grid">
               <div className="stat-card"><div className="label">Total Invoices</div><div className="value">{stats.totalInvoices}</div></div>
-              <div className="stat-card"><div className="label">Pending</div><div className="value" style={{ color: 'var(--orange)' }}>{stats.pendingInvoices}</div></div>
-              <div className="stat-card"><div className="label">Approved</div><div className="value" style={{ color: 'var(--green)' }}>{stats.approvedInvoices}</div></div>
-              <div className="stat-card"><div className="label">Total Expenses</div><div className="value" style={{ color: 'var(--blue)' }}>₹{stats.totalExpenses.toLocaleString()}</div></div>
+              <div className="stat-card" style={{ borderLeft: '3px solid var(--orange)' }}><div className="label">Pending Approval</div><div className="value" style={{ color: 'var(--orange)' }}>{stats.pendingInvoices}</div><div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 2 }}>₹{stats.pendingAmount?.toLocaleString()}</div></div>
+              <div className="stat-card" style={{ borderLeft: '3px solid var(--green)' }}><div className="label">Approved</div><div className="value" style={{ color: 'var(--green)' }}>{stats.approvedInvoices}</div></div>
+              <div className="stat-card" style={{ borderLeft: '3px solid var(--blue)' }}><div className="label">Total Expenses</div><div className="value" style={{ color: 'var(--blue)', fontSize: 20 }}>₹{stats.totalExpenses.toLocaleString()}</div></div>
             </div>
 
+            {/* Pending Approvals Quick View */}
+            {stats.recentPending && stats.recentPending.length > 0 && (
+              <div className="card" style={{ marginBottom: 16, borderLeft: '3px solid var(--orange)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <h3 style={{ fontSize: 16, fontWeight: 700 }}>Pending Approvals</h3>
+                  <button className="btn btn-sm btn-outline" onClick={() => setTab('approvals')}>View All</button>
+                </div>
+                {stats.recentPending.map(inv => (
+                  <div key={inv._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--gray-100)', cursor: 'pointer' }} onClick={() => setSelectedInvoice(inv)}>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{inv.vendorName || inv.fileName}</div>
+                      <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>By: {inv.uploadedByName} · {inv.category} · {new Date(inv.createdAt).toLocaleDateString()}</div>
+                    </div>
+                    <div style={{ fontWeight: 700, color: 'var(--orange)', whiteSpace: 'nowrap' }}>₹{inv.totalAmount?.toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Status Donut Chart */}
+            {stats.byStatus && stats.byStatus.length > 0 && (
+              <div className="card" style={{ marginBottom: 16 }}>
+                <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>Invoice Status Breakdown</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+                  <div style={{ position: 'relative', width: 120, height: 120 }}>
+                    <svg viewBox="0 0 36 36" style={{ width: 120, height: 120, transform: 'rotate(-90deg)' }}>
+                      {(() => {
+                        const total = stats.byStatus.reduce((s, x) => s + x.count, 0);
+                        const colors: Record<string, string> = { pending: '#f59e0b', approved: '#16a34a', rejected: '#dc2626' };
+                        let offset = 0;
+                        return stats.byStatus.map(s => {
+                          const pct = total > 0 ? (s.count / total) * 100 : 0;
+                          const el = <circle key={s._id} r="15.9" cx="18" cy="18" fill="none" stroke={colors[s._id] || '#9ca3af'} strokeWidth="3.5" strokeDasharray={`${pct} ${100 - pct}`} strokeDashoffset={-offset} />;
+                          offset += pct;
+                          return el;
+                        });
+                      })()}
+                    </svg>
+                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
+                      <div style={{ fontSize: 20, fontWeight: 700 }}>{stats.totalInvoices}</div>
+                      <div style={{ fontSize: 10, color: 'var(--gray-500)' }}>Total</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {stats.byStatus.map(s => {
+                      const colors: Record<string, string> = { pending: '#f59e0b', approved: '#16a34a', rejected: '#dc2626' };
+                      return (
+                        <div key={s._id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 12, height: 12, borderRadius: '50%', background: colors[s._id] || '#9ca3af' }} />
+                          <span style={{ fontWeight: 600, textTransform: 'capitalize', fontSize: 14 }}>{s._id}</span>
+                          <span style={{ color: 'var(--gray-500)', fontSize: 13 }}>{s.count} (₹{s.total.toLocaleString()})</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Category Bar Chart */}
             <div className="card" style={{ marginBottom: 16 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>Expenses by Category</h3>
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>Expenses by Category</h3>
               {stats.byCategory.length === 0 ? <p style={{ color: 'var(--gray-400)', fontSize: 14 }}>No data yet</p> : (
                 <div>
-                  {stats.byCategory.map(c => (
-                    <div key={c._id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--gray-100)' }}>
-                      <span style={{ fontWeight: 600 }}>{c._id || 'Uncategorized'}</span>
-                      <span>₹{c.total.toLocaleString()} <span style={{ color: 'var(--gray-400)', fontSize: 12 }}>({c.count})</span></span>
-                    </div>
-                  ))}
+                  {(() => {
+                    const maxVal = Math.max(...stats.byCategory.map(c => c.total));
+                    const barColors = ['#2563eb', '#7c3aed', '#db2777', '#ea580c', '#16a34a', '#0891b2', '#4f46e5', '#c026d3', '#d97706', '#059669'];
+                    return stats.byCategory.map((c, i) => (
+                      <div key={c._id} style={{ marginBottom: 12 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ fontWeight: 600, fontSize: 13 }}>{c._id || 'Uncategorized'}</span>
+                          <span style={{ fontWeight: 600, fontSize: 13 }}>₹{c.total.toLocaleString()} <span style={{ color: 'var(--gray-400)', fontWeight: 400 }}>({c.count})</span></span>
+                        </div>
+                        <div style={{ height: 8, background: 'var(--gray-100)', borderRadius: 4, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${(c.total / maxVal) * 100}%`, background: barColors[i % barColors.length], borderRadius: 4, transition: 'width 0.5s' }} />
+                        </div>
+                      </div>
+                    ));
+                  })()}
                 </div>
               )}
             </div>
 
+            {/* Expenses by User */}
+            {stats.byUser && stats.byUser.length > 0 && (
+              <div className="card" style={{ marginBottom: 16 }}>
+                <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>Expenses by User</h3>
+                {(() => {
+                  const maxVal = Math.max(...stats.byUser.map(u => u.total));
+                  return stats.byUser.map(u => (
+                    <div key={u._id} style={{ marginBottom: 16 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <div>
+                          <span style={{ fontWeight: 700, fontSize: 14 }}>{u._id}</span>
+                          <span style={{ color: 'var(--gray-400)', fontSize: 12, marginLeft: 8 }}>{u.count} invoices</span>
+                          {u.pending > 0 && <span style={{ color: 'var(--orange)', fontSize: 12, marginLeft: 8 }}>{u.pending} pending</span>}
+                        </div>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--blue)' }}>₹{u.total.toLocaleString()}</span>
+                      </div>
+                      <div style={{ height: 10, background: 'var(--gray-100)', borderRadius: 5, overflow: 'hidden', display: 'flex' }}>
+                        <div style={{ height: '100%', width: `${(u.approved / maxVal) * 100}%`, background: 'var(--green)', transition: 'width 0.5s' }} />
+                        <div style={{ height: '100%', width: `${((u.total - u.approved) / maxVal) * 100}%`, background: 'var(--orange)', transition: 'width 0.5s' }} />
+                      </div>
+                      <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
+                        <span style={{ fontSize: 11, color: 'var(--green)' }}>Approved: ₹{u.approved.toLocaleString()}</span>
+                        <span style={{ fontSize: 11, color: 'var(--orange)' }}>Pending: ₹{(u.total - u.approved).toLocaleString()}</span>
+                      </div>
+                    </div>
+                  ));
+                })()}
+              </div>
+            )}
+
+            {/* Monthly Expenses Chart */}
             <div className="card">
-              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>Monthly Expenses</h3>
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>Monthly Expenses Trend</h3>
               {stats.byMonth.length === 0 ? <p style={{ color: 'var(--gray-400)', fontSize: 14 }}>No data yet</p> : (
                 <div>
-                  {stats.byMonth.map(m => (
-                    <div key={m._id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--gray-100)' }}>
-                      <span style={{ fontWeight: 600 }}>{m._id}</span>
-                      <span>₹{m.total.toLocaleString()} <span style={{ color: 'var(--gray-400)', fontSize: 12 }}>({m.count} invoices)</span></span>
-                    </div>
-                  ))}
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 150, padding: '0 4px' }}>
+                    {(() => {
+                      const maxVal = Math.max(...stats.byMonth.map(m => m.total), 1);
+                      return stats.byMonth.map(m => (
+                        <div key={m._id} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                          <span style={{ fontSize: 10, color: 'var(--gray-500)', fontWeight: 600 }}>₹{m.total >= 1000 ? `${(m.total / 1000).toFixed(0)}K` : m.total}</span>
+                          <div style={{ width: '100%', maxWidth: 40, height: `${Math.max((m.total / maxVal) * 120, 4)}px`, background: 'linear-gradient(180deg, #2563eb, #3b82f6)', borderRadius: '4px 4px 0 0', transition: 'height 0.5s' }} />
+                          <span style={{ fontSize: 10, color: 'var(--gray-500)', whiteSpace: 'nowrap' }}>{m._id.slice(5)}</span>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                  <div style={{ marginTop: 16 }}>
+                    {stats.byMonth.map(m => (
+                      <div key={m._id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--gray-100)', fontSize: 13 }}>
+                        <span style={{ fontWeight: 600 }}>{m._id}</span>
+                        <span>₹{m.total.toLocaleString()} <span style={{ color: 'var(--gray-400)' }}>({m.count} invoices)</span></span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -184,7 +299,7 @@ export default function AdminPage() {
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div className="amount">{inv.currency} {inv.totalAmount.toLocaleString()}</div>
+                    <div className="amount">₹{inv.totalAmount.toLocaleString()}</div>
                     <span className={`badge badge-${inv.status}`}>{inv.status}</span>
                   </div>
                 </div>
@@ -210,7 +325,7 @@ export default function AdminPage() {
                     <div className="vendor">{inv.vendorName || inv.fileName}</div>
                     <div className="meta"><span>By: {inv.uploadedByName}</span><span>{new Date(inv.createdAt).toLocaleDateString()}</span></div>
                   </div>
-                  <div className="amount">{inv.currency} {inv.totalAmount.toLocaleString()}</div>
+                  <div className="amount">₹{inv.totalAmount.toLocaleString()}</div>
                 </div>
               </div>
             ))}

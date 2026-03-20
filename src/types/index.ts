@@ -28,6 +28,8 @@ export interface Invoice {
   dueDate: string;
   totalAmount: number;
   currency: string;
+  originalCurrency?: string;
+  originalAmount?: number;
   subtotal: number;
   tax: number;
   lineItems: LineItem[];
@@ -57,6 +59,10 @@ export interface Stats {
   rejectedInvoices: number;
   totalUsers: number;
   totalExpenses: number;
+  pendingAmount: number;
   byCategory: { _id: string; total: number; count: number }[];
   byMonth: { _id: string; total: number; count: number }[];
+  byUser: { _id: string; total: number; count: number; approved: number; pending: number }[];
+  byStatus: { _id: string; total: number; count: number }[];
+  recentPending: Invoice[];
 }

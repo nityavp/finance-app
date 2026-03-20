@@ -112,7 +112,7 @@ export default function UserPage() {
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div className="amount">{inv.currency} {inv.totalAmount.toLocaleString()}</div>
+                    <div className="amount">₹{inv.totalAmount.toLocaleString()}</div>
                     <span className={`badge badge-${inv.status}`}>{inv.status}</span>
                   </div>
                 </div>
@@ -139,7 +139,7 @@ export default function UserPage() {
                       <span>{new Date(inv.createdAt).toLocaleDateString()}</span>
                     </div>
                   </div>
-                  <div className="amount">{inv.currency} {inv.totalAmount.toLocaleString()}</div>
+                  <div className="amount">₹{inv.totalAmount.toLocaleString()}</div>
                 </div>
               </div>
             ))}
