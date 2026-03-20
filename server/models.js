@@ -23,6 +23,8 @@ const invoiceSchema = new mongoose.Schema({
   dueDate: { type: String, default: '' },
   totalAmount: { type: Number, default: 0 },
   currency: { type: String, default: 'INR' },
+  originalCurrency: { type: String, default: 'INR' },
+  originalAmount: { type: Number, default: 0 },
   lineItems: [{ description: String, quantity: Number, unitPrice: Number, amount: Number }],
   tax: { type: Number, default: 0 },
   subtotal: { type: Number, default: 0 },

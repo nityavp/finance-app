@@ -137,6 +137,8 @@ app.post('/api/invoices/upload', auth, upload.single('invoice'), async (req, res
   "invoiceNumber": "",
   "invoiceDate": "",
   "dueDate": "",
+  "originalCurrency": "",
+  "originalAmount": 0,
   "totalAmount": 0,
   "currency": "INR",
   "subtotal": 0,
@@ -146,6 +148,7 @@ app.post('/api/invoices/upload', auth, upload.single('invoice'), async (req, res
   "tags": [],
   "rawText": ""
 }
+IMPORTANT: ALL monetary values (totalAmount, subtotal, tax, lineItems amounts) MUST be converted to Indian Rupees (INR). If the invoice is in USD, EUR, GBP, AUD, SGD or any other currency, convert all amounts to INR using approximate current exchange rates. Set "currency" to "INR" always. Store the original currency in "originalCurrency" and original total in "originalAmount" for reference. If the invoice is already in INR, set originalCurrency to "INR" and originalAmount same as totalAmount.
 If a field is not found, use the default value. For rawText, include all readable text from the invoice.`,
     ]);
 
@@ -169,7 +172,9 @@ If a field is not found, use the default value. For rawText, include all readabl
       invoiceDate: ocrData.invoiceDate || '',
       dueDate: ocrData.dueDate || '',
       totalAmount: ocrData.totalAmount || 0,
-      currency: ocrData.currency || 'INR',
+      currency: 'INR',
+      originalCurrency: ocrData.originalCurrency || 'INR',
+      originalAmount: ocrData.originalAmount || ocrData.totalAmount || 0,
       subtotal: ocrData.subtotal || 0,
       tax: ocrData.tax || 0,
       lineItems: ocrData.lineItems || [],
