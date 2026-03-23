@@ -1,0 +1,1346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>ValuePitch - Finance & Journey</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  [x-cloak] { display: none !important; }
+  .sidebar-transition { transition: width 0.2s ease, transform 0.2s ease; }
+  .toast-enter { animation: slideIn 0.3s ease; }
+  .toast-exit { animation: slideOut 0.3s ease forwards; }
+  @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fadeIn 0.3s ease; }
+  .drop-zone.drag-over { border-color: #3b82f6; background-color: #eff6ff; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  .spinner { border: 3px solid #e5e7eb; border-top-color: #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.5); }
+  /* Mobile bottom nav safe area */
+  .bottom-nav { padding-bottom: env(safe-area-inset-bottom, 8px); }
+  /* Pulse animation for active journey */
+  .pulse-dot { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  /* Mobile card touch feedback */
+  .touch-card { transition: transform 0.1s; }
+  .touch-card:active { transform: scale(0.98); }
+</style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<div id="app"></div>
+
+<div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2"></div>
+
+<div id="modal-container" class="hidden fixed inset-0 z-[9998] flex items-center justify-center bg-black/50">
+  <div id="modal-content" class="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"></div>
+</div>
+
+<script>
+const API = '';
+const CATEGORIES = ['Office Supplies','Software & SaaS','Travel & Transport','Food & Beverages','Utilities','Rent & Lease','Professional Services','Marketing & Advertising','Equipment','Maintenance & Repairs','Insurance','Telecommunications','Raw Materials','Logistics & Shipping','Salary & Wages','Medical & Healthcare','Legal & Compliance','Training & Education','Miscellaneous'];
+const LEAD_STATUSES = ['new','contacted','follow_up','qualified','converted','lost'];
+const ROLES = [
+  { value: 'admin', label: 'Admin' },
+  { value: 'finance_manager', label: 'Finance Manager' },
+  { value: 'operations_manager', label: 'Operations Manager' },
+  { value: 'branch_manager', label: 'Branch Manager' },
+  { value: 'relation_manager', label: 'Relation Manager' },
+  { value: 'user', label: 'User' },
+];
+
+let state = {
+  user: null,
+  token: localStorage.getItem('cm_token'),
+  sidebarOpen: window.innerWidth > 768,
+  newClaimDropdown: false,
+};
+
+function formatINR(n) {
+  if (n == null || isNaN(n)) return '\u20B90';
+  const num = Number(n);
+  const s = Math.abs(num).toFixed(2);
+  const [intPart, dec] = s.split('.');
+  let result = '';
+  const len = intPart.length;
+  if (len <= 3) { result = intPart; }
+  else {
+    result = intPart.slice(-3);
+    let remaining = intPart.slice(0, -3);
+    while (remaining.length > 2) { result = remaining.slice(-2) + ',' + result; remaining = remaining.slice(0, -2); }
+    if (remaining.length > 0) result = remaining + ',' + result;
+  }
+  return (num < 0 ? '-' : '') + '\u20B9' + result + (dec !== '00' ? '.' + dec : '');
+}
+
+function formatDate(d) {
+  if (!d) return '-';
+  try { const date = new Date(d); if (isNaN(date.getTime())) return d; return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }); }
+  catch { return d; }
+}
+
+function formatTime(d) {
+  if (!d) return '-';
+  try { return new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }); }
+  catch { return d; }
+}
+
+function statusBadge(status) {
+  const colors = { pending: 'bg-yellow-100 text-yellow-800', approved: 'bg-green-100 text-green-800', rejected: 'bg-red-100 text-red-800' };
+  return `<span class="px-2.5 py-1 rounded-full text-xs font-semibold ${colors[status] || 'bg-gray-100 text-gray-800'}">${(status || 'unknown').charAt(0).toUpperCase() + (status || '').slice(1)}</span>`;
+}
+
+function leadStatusBadge(status) {
+  const colors = { new: 'bg-blue-100 text-blue-800', contacted: 'bg-indigo-100 text-indigo-800', follow_up: 'bg-yellow-100 text-yellow-800', qualified: 'bg-purple-100 text-purple-800', converted: 'bg-green-100 text-green-800', lost: 'bg-red-100 text-red-800' };
+  const labels = { new: 'New', contacted: 'Contacted', follow_up: 'Follow Up', qualified: 'Qualified', converted: 'Converted', lost: 'Lost' };
+  return `<span class="px-2.5 py-1 rounded-full text-xs font-semibold ${colors[status] || 'bg-gray-100 text-gray-800'}">${labels[status] || status}</span>`;
+}
+
+function roleBadge(role) {
+  const colors = { admin: 'bg-purple-100 text-purple-700', finance_manager: 'bg-emerald-100 text-emerald-700', operations_manager: 'bg-orange-100 text-orange-700', branch_manager: 'bg-cyan-100 text-cyan-700', relation_manager: 'bg-pink-100 text-pink-700', user: 'bg-gray-100 text-gray-600' };
+  const labels = { admin: 'Admin', finance_manager: 'Finance Mgr', operations_manager: 'Ops Mgr', branch_manager: 'Branch Mgr', relation_manager: 'Relation Mgr', user: 'User' };
+  return `<span class="text-xs ${colors[role] || 'bg-gray-100 text-gray-600'} px-2 py-0.5 rounded font-medium">${labels[role] || role}</span>`;
+}
+
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toast-container');
+  const colors = { success: 'bg-green-600', error: 'bg-red-600', info: 'bg-blue-600' };
+  const icons = { success: 'check-circle', error: 'alert-circle', info: 'info' };
+  const el = document.createElement('div');
+  el.className = `toast-enter ${colors[type]} text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 min-w-[280px]`;
+  el.innerHTML = `<i data-lucide="${icons[type]}" class="w-5 h-5"></i><span class="text-sm">${message}</span>`;
+  container.appendChild(el);
+  lucide.createIcons({ nodes: [el] });
+  setTimeout(() => { el.classList.replace('toast-enter', 'toast-exit'); setTimeout(() => el.remove(), 300); }, 3500);
+}
+
+async function apiFetch(url, options = {}) {
+  const headers = { ...options.headers };
+  if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+  if (!(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+  const res = await fetch(API + url, { ...options, headers, body: options.body instanceof FormData ? options.body : (options.body ? JSON.stringify(options.body) : undefined) });
+  if (res.status === 401) { logout(); throw new Error('Session expired'); }
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+function logout() {
+  state.token = null; state.user = null;
+  localStorage.removeItem('cm_token'); localStorage.removeItem('cm_user');
+  location.hash = '#login';
+}
+
+function navigate(hash) { location.hash = hash; }
+
+function showModal(html) {
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-container').classList.remove('hidden');
+  lucide.createIcons({ nodes: [document.getElementById('modal-content')] });
+}
+
+function hideModal() {
+  document.getElementById('modal-container').classList.add('hidden');
+  document.getElementById('modal-content').innerHTML = '';
+}
+
+document.getElementById('modal-container').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('modal-container')) hideModal();
+});
+
+// Role helpers
+function isAdmin() { return state.user?.role === 'admin'; }
+function isFinance() { return ['admin', 'finance_manager'].includes(state.user?.role); }
+function isOps() { return ['admin', 'operations_manager', 'branch_manager'].includes(state.user?.role); }
+function hasJourneyAccess() { return state.user?.hasJourneyAccess || isAdmin() || isOps(); }
+function isFieldUser() { return ['relation_manager', 'user'].includes(state.user?.role); }
+
+// Geolocation helper
+function getCurrentLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('Geolocation not supported'));
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      err => resolve({ lat: 0, lng: 0 }), // Fallback to 0,0 if denied
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  });
+}
+
+async function init() {
+  if (state.token) {
+    try {
+      const cached = localStorage.getItem('cm_user');
+      if (cached) state.user = JSON.parse(cached);
+      const user = await apiFetch('/api/me');
+      state.user = user;
+      localStorage.setItem('cm_user', JSON.stringify(user));
+    } catch { logout(); return; }
+  }
+  if (!location.hash) {
+    if (!state.token) location.hash = '#login';
+    else if (isAdmin()) location.hash = '#dashboard';
+    else if (isFinance()) location.hash = '#dashboard';
+    else if (isOps()) location.hash = '#ops-dashboard';
+    else if (hasJourneyAccess()) location.hash = '#journey-home';
+    else location.hash = '#new-claim';
+  }
+  route();
+}
+
+window.addEventListener('hashchange', route);
+
+function route() {
+  const hash = location.hash || '#login';
+  if (!state.token && hash !== '#login') { location.hash = '#login'; return; }
+  if (state.token && hash === '#login') {
+    if (isAdmin()) location.hash = '#dashboard';
+    else if (isFinance()) location.hash = '#dashboard';
+    else if (isOps()) location.hash = '#ops-dashboard';
+    else if (hasJourneyAccess()) location.hash = '#journey-home';
+    else location.hash = '#new-claim';
+    return;
+  }
+  state.newClaimDropdown = false;
+  if (hash === '#login') return renderLogin();
+  renderLayout();
+  const content = document.getElementById('content');
+  if (!content) return;
+
+  // Route mapping
+  if (hash === '#dashboard') renderDashboard(content);
+  else if (hash === '#claims') renderMyClaims(content);
+  else if (hash === '#new-claim' || hash === '#upload-claim') renderNewClaim(content, 'upload');
+  else if (hash === '#manual-claim') renderNewClaim(content, 'manual');
+  else if (hash === '#approvals') renderApprovals(content);
+  else if (hash === '#users') renderUsers(content);
+  else if (hash.startsWith('#claim/')) renderClaimDetail(content, hash.split('/')[1]);
+  // Journey routes
+  else if (hash === '#journey-home') renderJourneyHome(content);
+  else if (hash === '#journey-history') renderJourneyHistory(content);
+  else if (hash === '#my-leads') renderMyLeads(content);
+  else if (hash.startsWith('#journey/')) renderJourneyDetail(content, hash.split('/')[1]);
+  else if (hash.startsWith('#lead/')) renderLeadDetail(content, hash.split('/')[1]);
+  // Ops routes
+  else if (hash === '#ops-dashboard') renderOpsDashboard(content);
+  else if (hash === '#all-journeys') renderAllJourneys(content);
+  else if (hash === '#all-leads') renderAllLeads(content);
+  else {
+    if (isAdmin()) renderDashboard(content);
+    else if (isFinance()) renderDashboard(content);
+    else if (isOps()) renderOpsDashboard(content);
+    else if (hasJourneyAccess()) renderJourneyHome(content);
+    else renderNewClaim(content, 'upload');
+  }
+}
+
+function renderLogin() {
+  document.getElementById('app').innerHTML = `
+  <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-4">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
+      <div class="text-center mb-8">
+        <div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <i data-lucide="building-2" class="w-8 h-8 text-white"></i>
+        </div>
+        <h1 class="text-2xl font-bold text-gray-900">ValuePitch</h1>
+        <p class="text-gray-500 mt-1">Finance & Journey Tracker</p>
+      </div>
+      <form id="loginForm" class="space-y-5">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1.5">Username</label>
+          <div class="relative">
+            <i data-lucide="user" class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400"></i>
+            <input type="text" id="loginUser" class="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-base" placeholder="Enter username" required autocomplete="username">
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
+          <div class="relative">
+            <i data-lucide="lock" class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400"></i>
+            <input type="password" id="loginPass" class="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-base" placeholder="Enter password" required autocomplete="current-password">
+          </div>
+        </div>
+        <button type="submit" id="loginBtn" class="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition flex items-center justify-center gap-2 text-base">
+          <span>Sign In</span>
+        </button>
+        <p id="loginError" class="text-red-500 text-sm text-center hidden"></p>
+      </form>
+    </div>
+  </div>`;
+  lucide.createIcons();
+  document.getElementById('loginForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('loginBtn');
+    const errEl = document.getElementById('loginError');
+    errEl.classList.add('hidden');
+    btn.disabled = true; btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;border-width:2px;"></div>';
+    try {
+      const data = await apiFetch('/api/login', { method: 'POST', body: { username: document.getElementById('loginUser').value, password: document.getElementById('loginPass').value } });
+      state.token = data.token; state.user = data.user;
+      localStorage.setItem('cm_token', data.token);
+      localStorage.setItem('cm_user', JSON.stringify(data.user));
+      showToast('Welcome, ' + data.user.name);
+      if (['admin', 'finance_manager'].includes(data.user.role)) location.hash = '#dashboard';
+      else if (['operations_manager', 'branch_manager'].includes(data.user.role)) location.hash = '#ops-dashboard';
+      else if (data.user.hasJourneyAccess) location.hash = '#journey-home';
+      else location.hash = '#new-claim';
+    } catch (err) {
+      errEl.textContent = err.message; errEl.classList.remove('hidden');
+      btn.disabled = false; btn.innerHTML = '<span>Sign In</span>';
+    }
+  };
+}
+
+function renderLayout() {
+  const user = state.user || {};
+  const hash = location.hash;
+  const usesMobileLayout = isFieldUser() || (hasJourneyAccess() && !isAdmin() && !isFinance() && !isOps());
+
+  if (usesMobileLayout) {
+    // Mobile-friendly bottom nav for field users
+    const tabs = [];
+    if (hasJourneyAccess()) tabs.push({ id: '#journey-home', icon: 'compass', label: 'Journey' });
+    if (hasJourneyAccess()) tabs.push({ id: '#my-leads', icon: 'users', label: 'Leads' });
+    tabs.push({ id: '#new-claim', icon: 'plus-circle', label: 'Claim' });
+    tabs.push({ id: '#claims', icon: 'file-text', label: 'Claims' });
+    if (user.canApprove) tabs.push({ id: '#approvals', icon: 'check-square', label: 'Approve' });
+
+    document.getElementById('app').innerHTML = `
+    <div class="min-h-screen flex flex-col pb-20">
+      <header class="bg-white border-b border-gray-200 sticky top-0 z-30">
+        <div class="px-4 py-3 flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <div class="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center">
+              <i data-lucide="building-2" class="w-5 h-5 text-white"></i>
+            </div>
+            <div>
+              <h1 class="font-bold text-base text-gray-900">ValuePitch</h1>
+              <p class="text-xs text-gray-500">${user.name || ''}</p>
+            </div>
+          </div>
+          <button onclick="logout()" class="p-2 rounded-lg hover:bg-gray-100 transition text-gray-400 hover:text-red-500" title="Sign Out">
+            <i data-lucide="log-out" class="w-5 h-5"></i>
+          </button>
+        </div>
+      </header>
+      <div id="content" class="flex-1 p-4 overflow-y-auto bg-gray-50"></div>
+      <nav class="bottom-nav fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-30 flex justify-around px-2 pt-2 pb-2">
+        ${tabs.map(t => {
+          const active = hash === t.id || (t.id === '#new-claim' && (hash === '#upload-claim' || hash === '#manual-claim'));
+          return `<a href="${t.id}" class="flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg ${active ? 'text-blue-600' : 'text-gray-400'}">
+            <i data-lucide="${t.icon}" class="w-5 h-5"></i>
+            <span class="text-[10px] font-medium">${t.label}</span>
+          </a>`;
+        }).join('')}
+      </nav>
+    </div>`;
+  } else {
+    // Desktop sidebar layout for admin/finance/ops
+    const navItems = [];
+    if (isFinance()) navItems.push({ id: '#dashboard', icon: 'layout-dashboard', label: 'Finance Dashboard' });
+    if (isOps()) navItems.push({ id: '#ops-dashboard', icon: 'map-pin', label: 'Ops Dashboard' });
+    if (isOps()) navItems.push({ id: '#all-journeys', icon: 'route', label: 'All Journeys' });
+    if (isOps()) navItems.push({ id: '#all-leads', icon: 'contact', label: 'All Leads' });
+    if (hasJourneyAccess()) navItems.push({ id: '#journey-home', icon: 'compass', label: 'My Journey' });
+    navItems.push({ id: '#new-claim', icon: 'plus-circle', label: 'New Claim' });
+    navItems.push({ id: '#claims', icon: 'file-text', label: 'My Claims' });
+    if (user.canApprove || isFinance()) navItems.push({ id: '#approvals', icon: 'check-square', label: 'Approvals' });
+    if (isAdmin()) navItems.push({ id: '#users', icon: 'users', label: 'Users' });
+
+    document.getElementById('app').innerHTML = `
+    <div class="flex min-h-screen">
+      <div id="sidebar-overlay" class="fixed inset-0 bg-black/50 z-40 lg:hidden ${state.sidebarOpen ? '' : 'hidden'}" onclick="toggleSidebar()"></div>
+      <aside id="sidebar" class="sidebar-transition fixed lg:static inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col ${state.sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0 lg:w-64'}">
+        <div class="p-5 border-b border-slate-700/50">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center flex-shrink-0">
+              <i data-lucide="building-2" class="w-5 h-5"></i>
+            </div>
+            <div class="overflow-hidden">
+              <h1 class="font-bold text-lg leading-tight">ValuePitch</h1>
+              <p class="text-slate-400 text-xs truncate">${user.name || ''} - ${ROLES.find(r => r.value === user.role)?.label || user.role}</p>
+            </div>
+          </div>
+        </div>
+        <nav class="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
+          ${navItems.map(n => {
+            const active = hash === n.id || (n.id === '#new-claim' && (hash === '#upload-claim' || hash === '#manual-claim'));
+            return `<a href="${n.id}" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium ${active ? 'bg-blue-600 text-white' : 'text-slate-300 hover:text-white hover:bg-slate-800'} transition">
+              <i data-lucide="${n.icon}" class="w-5 h-5"></i><span>${n.label}</span>
+            </a>`;
+          }).join('')}
+        </nav>
+        <div class="p-3 border-t border-slate-700/50">
+          <button onclick="logout()" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:text-red-400 hover:bg-slate-800 transition">
+            <i data-lucide="log-out" class="w-5 h-5"></i><span>Sign Out</span>
+          </button>
+        </div>
+      </aside>
+      <main class="flex-1 flex flex-col min-w-0">
+        <header class="bg-white border-b border-gray-200 px-4 lg:px-6 py-3 flex items-center justify-between sticky top-0 z-30">
+          <button onclick="toggleSidebar()" class="lg:hidden p-2 rounded-lg hover:bg-gray-100">
+            <i data-lucide="menu" class="w-5 h-5 text-gray-600"></i>
+          </button>
+          <div class="flex items-center gap-3 ml-auto">
+            <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+              <span class="text-blue-700 text-sm font-semibold">${(user.name || 'U').charAt(0).toUpperCase()}</span>
+            </div>
+            <div class="hidden sm:block">
+              <p class="text-sm font-medium text-gray-900">${user.name || ''}</p>
+              <p class="text-xs text-gray-500">${ROLES.find(r => r.value === user.role)?.label || user.role}</p>
+            </div>
+          </div>
+        </header>
+        <div id="content" class="flex-1 p-4 lg:p-6 overflow-y-auto"></div>
+      </main>
+    </div>`;
+  }
+  lucide.createIcons();
+}
+
+window.toggleSidebar = () => {
+  state.sidebarOpen = !state.sidebarOpen;
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  if (state.sidebarOpen) { sidebar?.classList.remove('-translate-x-full'); sidebar?.classList.add('translate-x-0'); overlay?.classList.remove('hidden'); }
+  else { sidebar?.classList.add('-translate-x-full'); sidebar?.classList.remove('translate-x-0'); overlay?.classList.add('hidden'); }
+};
+
+// ===== FINANCE DASHBOARD =====
+async function renderDashboard(container) {
+  if (!isFinance()) { container.innerHTML = '<p class="text-gray-500 p-4">Finance access required.</p>'; return; }
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const stats = await apiFetch('/api/stats');
+    container.innerHTML = `
+    <div class="mb-6"><h2 class="text-2xl font-bold text-gray-900">Finance Dashboard</h2><p class="text-gray-500 text-sm mt-1">Overview of all claims</p></div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      ${statCard('Total Claims', stats.totalInvoices, 'file-text', 'blue')}
+      ${statCard('Pending', stats.pendingInvoices, 'clock', 'yellow', formatINR(stats.pendingAmount))}
+      ${statCard('Approved', stats.approvedInvoices, 'check-circle', 'green', formatINR(stats.totalExpenses))}
+      ${statCard('Rejected', stats.rejectedInvoices, 'x-circle', 'red')}
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div class="bg-white rounded-xl border border-gray-200 p-5"><h3 class="font-semibold text-gray-900 mb-4">Claims by Category</h3><div style="height:280px"><canvas id="catChart"></canvas></div></div>
+      <div class="bg-white rounded-xl border border-gray-200 p-5"><h3 class="font-semibold text-gray-900 mb-4">Monthly Approved Amount</h3><div style="height:280px"><canvas id="monthChart"></canvas></div></div>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-200 p-5">
+      <h3 class="font-semibold text-gray-900 mb-4">Recent Pending Claims</h3>
+      ${stats.recentPending.length === 0 ? '<p class="text-gray-400 text-sm py-4 text-center">No pending claims</p>' : `
+      <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="border-b border-gray-100 text-left text-gray-500">
+        <th class="pb-3 font-medium">Vendor</th><th class="pb-3 font-medium">Amount</th><th class="pb-3 font-medium">Category</th><th class="pb-3 font-medium">By</th><th class="pb-3 font-medium">Date</th><th class="pb-3"></th>
+      </tr></thead><tbody>
+        ${stats.recentPending.map(inv => `<tr class="border-b border-gray-50 hover:bg-gray-50 cursor-pointer" onclick="location.hash='#claim/${inv._id}'">
+          <td class="py-3 font-medium text-gray-900">${esc(inv.vendorName || '-')}</td>
+          <td class="py-3 text-gray-700">${formatINR(inv.totalAmount)}</td>
+          <td class="py-3"><span class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">${esc(inv.category || '-')}</span></td>
+          <td class="py-3 text-gray-600">${esc(inv.uploadedByName || '-')}</td>
+          <td class="py-3 text-gray-500">${formatDate(inv.createdAt)}</td>
+          <td class="py-3"><i data-lucide="chevron-right" class="w-4 h-4 text-gray-400"></i></td>
+        </tr>`).join('')}
+      </tbody></table></div>`}
+    </div>`;
+    lucide.createIcons();
+    const catColors = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#f97316','#14b8a6','#6366f1','#84cc16','#e11d48','#0ea5e9','#d946ef','#22c55e','#eab308','#a855f7','#f43f5e','#64748b'];
+    if (stats.byCategory.length > 0) new Chart(document.getElementById('catChart'), { type: 'doughnut', data: { labels: stats.byCategory.map(c => c._id || 'Unknown'), datasets: [{ data: stats.byCategory.map(c => c.total), backgroundColor: catColors.slice(0, stats.byCategory.length), borderWidth: 0 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } } } } });
+    if (stats.byMonth.length > 0) new Chart(document.getElementById('monthChart'), { type: 'bar', data: { labels: stats.byMonth.map(m => m._id), datasets: [{ label: 'Approved Amount', data: stats.byMonth.map(m => m.total), backgroundColor: '#3b82f6', borderRadius: 6 }] }, options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { callback: v => formatINR(v) } } }, plugins: { legend: { display: false } } } });
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+function statCard(label, value, icon, color, subtitle) {
+  const bg = { blue: 'bg-blue-50', yellow: 'bg-yellow-50', green: 'bg-green-50', red: 'bg-red-50', purple: 'bg-purple-50', orange: 'bg-orange-50', cyan: 'bg-cyan-50' };
+  const text = { blue: 'text-blue-600', yellow: 'text-yellow-600', green: 'text-green-600', red: 'text-red-600', purple: 'text-purple-600', orange: 'text-orange-600', cyan: 'text-cyan-600' };
+  return `<div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="flex items-center justify-between mb-3"><span class="text-sm font-medium text-gray-500">${label}</span><div class="w-10 h-10 ${bg[color]} rounded-lg flex items-center justify-center"><i data-lucide="${icon}" class="w-5 h-5 ${text[color]}"></i></div></div>
+    <p class="text-2xl font-bold text-gray-900">${value}</p>
+    ${subtitle ? `<p class="text-sm text-gray-500 mt-1">${subtitle}</p>` : ''}
+  </div>`;
+}
+
+// ===== MY CLAIMS =====
+async function renderMyClaims(container) {
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const claims = await apiFetch('/api/invoices/mine');
+    container.innerHTML = `
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-3">
+      <div><h2 class="text-xl font-bold text-gray-900">My Claims</h2><p class="text-gray-500 text-sm mt-1">${claims.length} total</p></div>
+      <div class="flex gap-2">
+        <select id="statusFilter" onchange="filterClaims()" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+          <option value="">All</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option>
+        </select>
+      </div>
+    </div>
+    ${claims.length === 0 ? '<div class="bg-white rounded-xl border border-gray-200 text-center py-16"><i data-lucide="inbox" class="w-12 h-12 text-gray-300 mx-auto mb-3"></i><p class="text-gray-500">No claims yet</p></div>' : `
+    <div class="space-y-3">
+      ${claims.map(c => `<div class="bg-white rounded-xl border border-gray-200 p-4 touch-card cursor-pointer claim-row" data-status="${c.status}" onclick="location.hash='#claim/${c._id}'">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-medium text-gray-900">${esc(c.vendorName || '-')}</span>
+          ${statusBadge(c.status)}
+        </div>
+        <div class="flex items-center justify-between text-sm">
+          <span class="text-gray-700 font-medium">${formatINR(c.totalAmount)}</span>
+          <span class="text-gray-400">${formatDate(c.createdAt)}</span>
+        </div>
+        <div class="flex items-center gap-2 mt-2">
+          <span class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">${esc(c.category || '-')}</span>
+          <span class="text-xs ${c.isManualClaim ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'} px-2 py-0.5 rounded">${c.isManualClaim ? 'Manual' : 'OCR'}</span>
+        </div>
+      </div>`).join('')}
+    </div>`}`;
+    lucide.createIcons();
+    window._allClaims = claims;
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+window.filterClaims = () => {
+  const filter = document.getElementById('statusFilter').value;
+  document.querySelectorAll('.claim-row').forEach(row => { row.style.display = (!filter || row.dataset.status === filter) ? '' : 'none'; });
+};
+
+// ===== NEW CLAIM =====
+function renderNewClaim(container, mode = 'upload') {
+  container.innerHTML = `
+  <div class="max-w-2xl mx-auto">
+    <div class="mb-6"><h2 class="text-xl font-bold text-gray-900">New Claim</h2><p class="text-gray-500 text-sm mt-1">Upload invoice or enter manually</p></div>
+    <div class="bg-white rounded-xl border border-gray-200 p-1.5 flex mb-6">
+      <button id="toggleUpload" onclick="switchClaimMode('upload')" class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition ${mode === 'upload' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}">
+        <i data-lucide="upload-cloud" class="w-4 h-4"></i> Upload Invoice
+      </button>
+      <button id="toggleManual" onclick="switchClaimMode('manual')" class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition ${mode === 'manual' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}">
+        <i data-lucide="edit-3" class="w-4 h-4"></i> Manual Entry
+      </button>
+    </div>
+    <div id="uploadSection" class="${mode === 'upload' ? '' : 'hidden'}">
+      <div class="bg-white rounded-xl border border-gray-200 p-6">
+        <div id="dropZone" class="drop-zone border-2 border-dashed border-gray-300 rounded-xl p-10 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition">
+          <i data-lucide="upload-cloud" class="w-12 h-12 text-gray-400 mx-auto mb-3"></i>
+          <p class="text-gray-700 font-medium">Drop invoice or click to browse</p>
+          <p class="text-gray-400 text-sm mt-1">JPG, PNG, PDF up to 10MB</p>
+          <input type="file" id="fileInput" accept="image/*,.pdf" class="hidden">
+        </div>
+        <div id="uploadPreview" class="hidden mt-4"><div class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg"><i data-lucide="file" class="w-5 h-5 text-blue-600"></i><span id="fileName" class="text-sm text-gray-700 flex-1 truncate"></span><button onclick="clearUpload()" class="text-gray-400 hover:text-red-500"><i data-lucide="x" class="w-4 h-4"></i></button></div></div>
+        <div id="uploadProgress" class="hidden mt-6"><div class="flex flex-col items-center py-6"><div class="spinner mb-3"></div><p class="text-gray-600 font-medium">Processing with AI...</p></div></div>
+        <button id="uploadBtn" onclick="submitUpload()" disabled class="mt-4 w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+          <i data-lucide="upload" class="w-4 h-4"></i> Upload & Extract
+        </button>
+      </div>
+      <div id="uploadResult" class="hidden mt-6"></div>
+    </div>
+    <div id="manualSection" class="${mode === 'manual' ? '' : 'hidden'}">
+      <form id="manualClaimForm" class="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div><label class="block text-sm font-medium text-gray-700 mb-1.5">Vendor Name <span class="text-red-500">*</span></label><input type="text" id="mc_vendor" required class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g., Acme Corp"></div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1.5">Invoice Number</label><input type="text" id="mc_invoiceNum" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="INV-001"></div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div><label class="block text-sm font-medium text-gray-700 mb-1.5">Invoice Date</label><input type="date" id="mc_invoiceDate" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"></div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1.5">Due Date</label><input type="date" id="mc_dueDate" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"></div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div><label class="block text-sm font-medium text-gray-700 mb-1.5">Amount (INR) <span class="text-red-500">*</span></label><div class="relative"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">\u20B9</span><input type="number" id="mc_amount" required min="0" step="0.01" class="w-full pl-8 pr-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0.00"></div></div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1.5">Category</label><select id="mc_category" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none">${CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('')}</select></div>
+        </div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-1.5">Notes</label><textarea id="mc_notes" rows="3" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none" placeholder="Additional details..."></textarea></div>
+        <button type="submit" id="manualSubmitBtn" class="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition flex items-center justify-center gap-2">
+          <i data-lucide="send" class="w-4 h-4"></i> Submit Claim
+        </button>
+      </form>
+    </div>
+  </div>`;
+  lucide.createIcons();
+
+  window.switchClaimMode = (m) => {
+    document.getElementById('uploadSection').classList.toggle('hidden', m !== 'upload');
+    document.getElementById('manualSection').classList.toggle('hidden', m !== 'manual');
+    document.getElementById('toggleUpload').className = `flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition ${m === 'upload' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`;
+    document.getElementById('toggleManual').className = `flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition ${m === 'manual' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`;
+  };
+
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  let selectedFile = null;
+  dropZone.onclick = () => fileInput.click();
+  dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); };
+  dropZone.ondragleave = () => dropZone.classList.remove('drag-over');
+  dropZone.ondrop = (e) => { e.preventDefault(); dropZone.classList.remove('drag-over'); handleFile(e.dataTransfer.files[0]); };
+  fileInput.onchange = () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); };
+  function handleFile(file) { if (!file) return; selectedFile = file; document.getElementById('fileName').textContent = file.name; document.getElementById('uploadPreview').classList.remove('hidden'); document.getElementById('uploadBtn').disabled = false; }
+  window.clearUpload = () => { selectedFile = null; fileInput.value = ''; document.getElementById('uploadPreview').classList.add('hidden'); document.getElementById('uploadBtn').disabled = true; };
+  window.submitUpload = async () => {
+    if (!selectedFile) return;
+    const btn = document.getElementById('uploadBtn'); const progress = document.getElementById('uploadProgress');
+    btn.disabled = true; progress.classList.remove('hidden');
+    try {
+      const fd = new FormData(); fd.append('invoice', selectedFile);
+      const result = await apiFetch('/api/invoices/upload', { method: 'POST', body: fd });
+      progress.classList.add('hidden'); showToast('Invoice processed');
+      document.getElementById('uploadResult').classList.remove('hidden');
+      document.getElementById('uploadResult').innerHTML = `<div class="bg-white rounded-xl border border-gray-200 p-6"><div class="flex items-center gap-2 mb-4"><i data-lucide="check-circle" class="w-5 h-5 text-green-600"></i><h3 class="font-semibold text-gray-900">Extracted</h3></div><div class="grid grid-cols-2 gap-4 text-sm"><div><span class="text-gray-500">Vendor</span><p class="font-medium">${esc(result.vendorName || '-')}</p></div><div><span class="text-gray-500">Amount</span><p class="font-medium">${formatINR(result.totalAmount)}</p></div><div><span class="text-gray-500">Category</span><p class="font-medium">${esc(result.category || '-')}</p></div><div><span class="text-gray-500">Status</span><p>${statusBadge(result.status)}</p></div></div><a href="#claim/${result._id}" class="mt-4 inline-block bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700">View Claim</a></div>`;
+      lucide.createIcons({ nodes: [document.getElementById('uploadResult')] });
+    } catch (err) { progress.classList.add('hidden'); btn.disabled = false; showToast(err.message, 'error'); }
+  };
+
+  document.getElementById('manualClaimForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('manualSubmitBtn');
+    btn.disabled = true; btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;border-width:2px;"></div>';
+    try {
+      const result = await apiFetch('/api/claims/manual', { method: 'POST', body: {
+        vendorName: document.getElementById('mc_vendor').value, invoiceNumber: document.getElementById('mc_invoiceNum').value,
+        invoiceDate: document.getElementById('mc_invoiceDate').value, dueDate: document.getElementById('mc_dueDate').value,
+        totalAmount: parseFloat(document.getElementById('mc_amount').value), category: document.getElementById('mc_category').value,
+        notes: document.getElementById('mc_notes').value,
+      }});
+      showToast('Claim submitted'); location.hash = '#claim/' + result._id;
+    } catch (err) { showToast(err.message, 'error'); btn.disabled = false; btn.innerHTML = '<i data-lucide="send" class="w-4 h-4"></i> Submit Claim'; lucide.createIcons({ nodes: [btn] }); }
+  };
+}
+
+// ===== CLAIM DETAIL =====
+async function renderClaimDetail(container, id) {
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const claim = await apiFetch('/api/invoices/' + id);
+    const isOwner = state.user && (claim.uploadedBy === state.user._id || claim.uploadedBy === state.user.id);
+    const isApprover = state.user?.canApprove || isFinance();
+    const canEdit = (isOwner || isAdmin()) && claim.status === 'pending';
+    container.innerHTML = `
+    <div class="max-w-4xl mx-auto">
+      <div class="flex items-center gap-2 mb-6">
+        <button onclick="history.back()" class="p-2 rounded-lg hover:bg-gray-100 transition"><i data-lucide="arrow-left" class="w-5 h-5 text-gray-600"></i></button>
+        <div class="flex-1"><h2 class="text-xl font-bold text-gray-900">${esc(claim.vendorName || 'Claim Detail')}</h2><p class="text-gray-500 text-sm">${claim.invoiceNumber ? 'INV ' + esc(claim.invoiceNumber) : claim._id.slice(-8)}</p></div>
+        ${statusBadge(claim.status)}
+      </div>
+      ${claim.imageData ? `<div class="bg-white rounded-xl border border-gray-200 p-4 mb-4"><img src="${claim.imageData}" alt="Invoice" class="w-full rounded-lg border border-gray-200 cursor-pointer" onclick="window.open(this.src)"></div>` : ''}
+      <div class="bg-white rounded-xl border border-gray-200 p-5 mb-4">
+        <div class="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
+          <div><span class="text-gray-500 block mb-0.5">Vendor</span><span class="font-medium text-gray-900">${esc(claim.vendorName || '-')}</span></div>
+          <div><span class="text-gray-500 block mb-0.5">Amount</span><span class="font-bold text-gray-900 text-lg">${formatINR(claim.totalAmount)}</span></div>
+          <div><span class="text-gray-500 block mb-0.5">Category</span><span class="font-medium text-gray-900">${esc(claim.category || '-')}</span></div>
+          <div><span class="text-gray-500 block mb-0.5">Date</span><span class="font-medium text-gray-900">${formatDate(claim.createdAt)}</span></div>
+          <div><span class="text-gray-500 block mb-0.5">Submitted By</span><span class="font-medium text-gray-900">${esc(claim.uploadedByName || '-')}</span></div>
+          ${claim.approvedByName ? `<div><span class="text-gray-500 block mb-0.5">${claim.status === 'approved' ? 'Approved' : 'Rejected'} By</span><span class="font-medium text-gray-900">${esc(claim.approvedByName)}</span></div>` : ''}
+        </div>
+        ${claim.notes ? `<div class="mt-4 pt-4 border-t border-gray-100"><span class="text-gray-500 text-sm block mb-1">Notes</span><p class="text-sm text-gray-900">${esc(claim.notes)}</p></div>` : ''}
+        ${claim.rejectionReason ? `<div class="mt-4 p-3 bg-red-50 rounded-lg"><span class="text-red-700 text-sm font-medium block mb-0.5">Rejection Reason</span><p class="text-sm text-red-600">${esc(claim.rejectionReason)}</p></div>` : ''}
+      </div>
+      <div class="flex flex-wrap gap-2">
+        ${canEdit ? `<button onclick="editClaim('${claim._id}')" class="bg-white border border-gray-300 text-gray-700 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50 flex items-center gap-1.5"><i data-lucide="edit" class="w-4 h-4"></i> Edit</button>` : ''}
+        ${isApprover && claim.status === 'pending' ? `
+        <button onclick="approveClaim('${claim._id}')" class="bg-green-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-green-700 flex items-center gap-1.5"><i data-lucide="check" class="w-4 h-4"></i> Approve</button>
+        <button onclick="rejectClaimModal('${claim._id}')" class="bg-red-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-red-700 flex items-center gap-1.5"><i data-lucide="x" class="w-4 h-4"></i> Reject</button>
+        ` : ''}
+      </div>
+    </div>`;
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+window.approveClaim = async (id) => { try { await apiFetch(`/api/invoices/${id}/approve`, { method: 'PUT', body: { status: 'approved' } }); showToast('Claim approved'); route(); } catch (err) { showToast(err.message, 'error'); } };
+window.rejectClaimModal = (id) => {
+  showModal(`<div class="p-6"><h3 class="text-lg font-bold text-gray-900 mb-4">Reject Claim</h3><div><label class="block text-sm font-medium text-gray-700 mb-1.5">Reason</label><textarea id="rejectReason" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none" placeholder="Enter reason..."></textarea></div><div class="flex gap-2 mt-5 justify-end"><button onclick="hideModal()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button><button onclick="rejectClaim('${id}')" class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">Reject</button></div></div>`);
+};
+window.rejectClaim = async (id) => { try { await apiFetch(`/api/invoices/${id}/approve`, { method: 'PUT', body: { status: 'rejected', rejectionReason: document.getElementById('rejectReason')?.value || '' } }); hideModal(); showToast('Claim rejected'); route(); } catch (err) { showToast(err.message, 'error'); } };
+window.editClaim = async (id) => {
+  try {
+    const claim = await apiFetch('/api/invoices/' + id);
+    showModal(`<div class="p-6"><h3 class="text-lg font-bold text-gray-900 mb-4">Edit Claim</h3><form id="editClaimForm" class="space-y-4"><div class="grid grid-cols-2 gap-4"><div><label class="block text-sm font-medium text-gray-700 mb-1">Vendor</label><input type="text" id="edit_vendor" value="${esc(claim.vendorName)}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none"></div><div><label class="block text-sm font-medium text-gray-700 mb-1">Amount</label><input type="number" id="edit_amount" value="${claim.totalAmount}" min="0" step="0.01" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none"></div></div><div><label class="block text-sm font-medium text-gray-700 mb-1">Category</label><select id="edit_category" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none">${CATEGORIES.map(c => `<option value="${c}" ${c === claim.category ? 'selected' : ''}>${c}</option>`).join('')}</select></div><div><label class="block text-sm font-medium text-gray-700 mb-1">Notes</label><textarea id="edit_notes" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none resize-none">${esc(claim.notes || '')}</textarea></div><div class="flex gap-2 justify-end"><button type="button" onclick="hideModal()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button><button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Save</button></div></form></div>`);
+    document.getElementById('editClaimForm').onsubmit = async (e) => { e.preventDefault(); try { await apiFetch(`/api/invoices/${id}`, { method: 'PUT', body: { vendorName: document.getElementById('edit_vendor').value, totalAmount: parseFloat(document.getElementById('edit_amount').value), category: document.getElementById('edit_category').value, notes: document.getElementById('edit_notes').value } }); hideModal(); showToast('Updated'); route(); } catch (err) { showToast(err.message, 'error'); } };
+  } catch (err) { showToast(err.message, 'error'); }
+};
+
+// ===== APPROVALS =====
+async function renderApprovals(container) {
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const claims = await apiFetch('/api/invoices/pending');
+    container.innerHTML = `
+    <div class="mb-6"><h2 class="text-xl font-bold text-gray-900">Pending Approvals</h2><p class="text-gray-500 text-sm mt-1">${claims.length} awaiting review</p></div>
+    ${claims.length === 0 ? '<div class="bg-white rounded-xl border border-gray-200 text-center py-16"><i data-lucide="check-circle" class="w-12 h-12 text-green-300 mx-auto mb-3"></i><p class="text-gray-500">All caught up!</p></div>' : `
+    <div class="space-y-3">
+      ${claims.map(c => `<div class="bg-white rounded-xl border border-gray-200 p-4 touch-card">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-medium text-gray-900 cursor-pointer" onclick="location.hash='#claim/${c._id}'">${esc(c.vendorName || '-')}</span>
+          <span class="text-gray-700 font-medium">${formatINR(c.totalAmount)}</span>
+        </div>
+        <div class="flex items-center justify-between text-sm mb-3">
+          <span class="text-gray-500">${esc(c.uploadedByName || '-')}</span>
+          <span class="text-gray-400">${formatDate(c.createdAt)}</span>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="approveClaim('${c._id}')" class="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-green-700 flex items-center justify-center gap-1"><i data-lucide="check" class="w-4 h-4"></i> Approve</button>
+          <button onclick="rejectClaimModal('${c._id}')" class="flex-1 bg-red-100 text-red-700 py-2 rounded-lg text-sm font-medium hover:bg-red-200 flex items-center justify-center gap-1"><i data-lucide="x" class="w-4 h-4"></i> Reject</button>
+          <button onclick="location.hash='#claim/${c._id}'" class="bg-gray-100 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-200"><i data-lucide="eye" class="w-4 h-4"></i></button>
+        </div>
+      </div>`).join('')}
+    </div>`}`;
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+// ===== USERS =====
+async function renderUsers(container) {
+  if (!isAdmin()) { container.innerHTML = '<p class="text-gray-500 p-4">Admin access required</p>'; return; }
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const users = await apiFetch('/api/users');
+    container.innerHTML = `
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-3">
+      <div><h2 class="text-xl font-bold text-gray-900">Users</h2><p class="text-gray-500 text-sm mt-1">${users.length} total</p></div>
+      <button onclick="addUserModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-1.5"><i data-lucide="user-plus" class="w-4 h-4"></i> Add User</button>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
+        <th class="px-5 py-3 font-medium">Name</th><th class="px-5 py-3 font-medium">Username</th><th class="px-5 py-3 font-medium">Role</th><th class="px-5 py-3 font-medium">Journey</th><th class="px-5 py-3 font-medium">Approver</th><th class="px-5 py-3 font-medium">Status</th><th class="px-5 py-3 font-medium text-right">Actions</th>
+      </tr></thead><tbody>
+        ${users.map(u => `<tr class="border-b border-gray-50 hover:bg-gray-50">
+          <td class="px-5 py-3.5"><div class="flex items-center gap-2.5"><div class="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold ${u.active ? 'bg-blue-600' : 'bg-gray-400'}">${(u.name || 'U').charAt(0).toUpperCase()}</div><span class="font-medium text-gray-900">${esc(u.name)}</span></div></td>
+          <td class="px-5 py-3.5 text-gray-600">${esc(u.username)}</td>
+          <td class="px-5 py-3.5">${roleBadge(u.role)}</td>
+          <td class="px-5 py-3.5">${u.hasJourneyAccess ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">Yes</span>' : '<span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">No</span>'}</td>
+          <td class="px-5 py-3.5">${u.canApprove ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">Yes</span>' : '<span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">No</span>'}</td>
+          <td class="px-5 py-3.5">${u.active !== false ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">Active</span>' : '<span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded">Inactive</span>'}</td>
+          <td class="px-5 py-3.5 text-right"><div class="flex gap-1.5 justify-end">
+            <button onclick='editUserModal(${JSON.stringify(u).replace(/'/g, "&#39;")})' class="p-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200" title="Edit"><i data-lucide="edit" class="w-4 h-4"></i></button>
+            ${u.role !== 'admin' && u.active !== false ? `<button onclick="deactivateUser('${u._id}')" class="p-1.5 bg-red-100 text-red-600 rounded-lg hover:bg-red-200" title="Deactivate"><i data-lucide="user-x" class="w-4 h-4"></i></button>` : ''}
+          </div></td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    </div>`;
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+window.addUserModal = async () => {
+  const allUsers = await apiFetch('/api/users/list');
+  showModal(`
+  <div class="p-6">
+    <h3 class="text-lg font-bold text-gray-900 mb-4">Add User</h3>
+    <form id="addUserForm" class="space-y-4">
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Full Name</label><input type="text" id="nu_name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Username</label><input type="text" id="nu_username" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Password</label><input type="password" id="nu_password" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Role</label><select id="nu_role" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none">${ROLES.map(r => `<option value="${r.value}">${r.label}</option>`).join('')}</select></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Branch</label><input type="text" id="nu_branch" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none" placeholder="Optional"></div>
+      <div class="flex items-center gap-4">
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="nu_journey" class="rounded border-gray-300 accent-blue-600"> Journey Tracker Access</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="nu_approver" class="rounded border-gray-300 accent-blue-600"> Can Approve Claims</label>
+      </div>
+      <div id="nu_approverSettings" class="hidden space-y-4">
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Approval Limit (INR)</label><input type="number" id="nu_limit" value="0" min="0" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none"></div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Approve claims from</label>
+          <div class="flex gap-3 mb-2"><label class="flex items-center gap-1.5 text-sm"><input type="radio" name="nu_scope" value="all" checked class="accent-blue-600" onchange="document.getElementById('nu_usersWrap').classList.add('hidden')"> All Users</label><label class="flex items-center gap-1.5 text-sm"><input type="radio" name="nu_scope" value="selected" class="accent-blue-600" onchange="document.getElementById('nu_usersWrap').classList.remove('hidden')"> Selected Users</label></div>
+          <div id="nu_usersWrap" class="hidden border border-gray-200 rounded-lg p-3 max-h-40 overflow-y-auto space-y-1.5">${allUsers.map(u => `<label class="flex items-center gap-2 text-sm hover:bg-gray-50 p-1 rounded cursor-pointer"><input type="checkbox" value="${u._id}" class="nu_userCheck rounded border-gray-300 accent-blue-600"> ${esc(u.name)}</label>`).join('')}</div>
+        </div>
+      </div>
+      <div class="flex gap-2 justify-end"><button type="button" onclick="hideModal()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button><button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Add User</button></div>
+    </form>
+  </div>`);
+  document.getElementById('nu_approver').onchange = (e) => { document.getElementById('nu_approverSettings').classList.toggle('hidden', !e.target.checked); };
+  document.getElementById('addUserForm').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const scope = document.querySelector('input[name="nu_scope"]:checked')?.value || 'all';
+      const selectedUsers = [...document.querySelectorAll('.nu_userCheck:checked')].map(cb => cb.value);
+      await apiFetch('/api/users', { method: 'POST', body: {
+        name: document.getElementById('nu_name').value, username: document.getElementById('nu_username').value,
+        password: document.getElementById('nu_password').value, role: document.getElementById('nu_role').value,
+        branch: document.getElementById('nu_branch').value, hasJourneyAccess: document.getElementById('nu_journey').checked,
+        canApprove: document.getElementById('nu_approver').checked, approvalLimit: parseInt(document.getElementById('nu_limit').value) || 0,
+        approveScope: scope, approveForUsers: scope === 'selected' ? selectedUsers : [],
+      }});
+      hideModal(); showToast('User created'); route();
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+};
+
+window.editUserModal = async (user) => {
+  const allUsers = await apiFetch('/api/users/list');
+  const approveForIds = (user.approveForUsers || []).map(id => typeof id === 'object' ? id._id || id : id.toString());
+  const userScope = user.approveScope || 'all';
+  showModal(`
+  <div class="p-6">
+    <h3 class="text-lg font-bold text-gray-900 mb-4">Edit User</h3>
+    <form id="editUserForm" class="space-y-4">
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Full Name</label><input type="text" id="eu_name" value="${esc(user.name)}" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Username</label><input type="text" id="eu_username" value="${esc(user.username)}" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">New Password <span class="text-gray-400">(blank=keep)</span></label><input type="password" id="eu_password" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none" placeholder="Leave blank to keep current"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Role</label><select id="eu_role" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none">${ROLES.map(r => `<option value="${r.value}" ${r.value === user.role ? 'selected' : ''}>${r.label}</option>`).join('')}</select></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Branch</label><input type="text" id="eu_branch" value="${esc(user.branch || '')}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none"></div>
+      <div class="flex items-center gap-4">
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="eu_journey" ${user.hasJourneyAccess ? 'checked' : ''} class="rounded border-gray-300 accent-blue-600"> Journey Access</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="eu_approver" ${user.canApprove ? 'checked' : ''} class="rounded border-gray-300 accent-blue-600"> Can Approve</label>
+      </div>
+      <div id="eu_approverSettings" class="${user.canApprove ? '' : 'hidden'} space-y-4">
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Approval Limit</label><input type="number" id="eu_limit" value="${user.approvalLimit || 0}" min="0" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none"></div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Approve claims from</label>
+          <div class="flex gap-3 mb-2"><label class="flex items-center gap-1.5 text-sm"><input type="radio" name="eu_scope" value="all" ${userScope === 'all' ? 'checked' : ''} class="accent-blue-600" onchange="document.getElementById('eu_usersWrap').classList.add('hidden')"> All</label><label class="flex items-center gap-1.5 text-sm"><input type="radio" name="eu_scope" value="selected" ${userScope === 'selected' ? 'checked' : ''} class="accent-blue-600" onchange="document.getElementById('eu_usersWrap').classList.remove('hidden')"> Selected</label></div>
+          <div id="eu_usersWrap" class="${userScope === 'selected' ? '' : 'hidden'} border border-gray-200 rounded-lg p-3 max-h-40 overflow-y-auto space-y-1.5">${allUsers.filter(u => u._id !== user._id).map(u => `<label class="flex items-center gap-2 text-sm hover:bg-gray-50 p-1 rounded cursor-pointer"><input type="checkbox" value="${u._id}" class="eu_userCheck rounded border-gray-300 accent-blue-600" ${approveForIds.includes(u._id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('')}</div>
+        </div>
+      </div>
+      <div class="flex gap-2 justify-end"><button type="button" onclick="hideModal()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button><button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Save</button></div>
+    </form>
+  </div>`);
+  document.getElementById('eu_approver').onchange = (e) => { document.getElementById('eu_approverSettings').classList.toggle('hidden', !e.target.checked); };
+  document.getElementById('editUserForm').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const scope = document.querySelector('input[name="eu_scope"]:checked')?.value || 'all';
+      const selectedUsers = [...document.querySelectorAll('.eu_userCheck:checked')].map(cb => cb.value);
+      const body = { name: document.getElementById('eu_name').value, username: document.getElementById('eu_username').value, role: document.getElementById('eu_role').value, branch: document.getElementById('eu_branch').value, hasJourneyAccess: document.getElementById('eu_journey').checked, canApprove: document.getElementById('eu_approver').checked, approvalLimit: parseInt(document.getElementById('eu_limit').value) || 0, approveScope: scope, approveForUsers: scope === 'selected' ? selectedUsers : [] };
+      const pw = document.getElementById('eu_password').value;
+      if (pw) body.password = pw;
+      await apiFetch(`/api/users/${user._id}`, { method: 'PUT', body });
+      hideModal(); showToast('User updated'); route();
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+};
+
+window.deactivateUser = async (id) => { if (!confirm('Deactivate this user?')) return; try { await apiFetch(`/api/users/${id}`, { method: 'DELETE' }); showToast('Deactivated'); route(); } catch (err) { showToast(err.message, 'error'); } };
+
+
+// ===== JOURNEY HOME (Mobile-friendly) =====
+async function renderJourneyHome(container) {
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const [activeJourney, activeTrip] = await Promise.all([
+      apiFetch('/api/journeys/active'),
+      apiFetch('/api/trips/active'),
+    ]);
+
+    if (!activeJourney) {
+      container.innerHTML = `
+      <div class="fade-in">
+        <div class="text-center py-8 mb-6">
+          <div class="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <i data-lucide="compass" class="w-10 h-10 text-blue-600"></i>
+          </div>
+          <h2 class="text-xl font-bold text-gray-900 mb-1">Start Your Day</h2>
+          <p class="text-gray-500 text-sm">Begin tracking your journey and leads</p>
+          <p id="currentLocDisplay" class="text-gray-400 text-xs mt-2 flex items-center justify-center gap-1"><i data-lucide="map-pin" class="w-3 h-3"></i> Detecting location...</p>
+        </div>
+        <button onclick="startJourney()" id="startDayBtn" class="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg hover:bg-blue-700 transition flex items-center justify-center gap-3 shadow-lg shadow-blue-200">
+          <i data-lucide="play-circle" class="w-6 h-6"></i> Start Day
+        </button>
+        <a href="#journey-history" class="block text-center text-blue-600 text-sm font-medium mt-6 hover:underline">View Journey History</a>
+      </div>`;
+      lucide.createIcons();
+      // Show current location preview
+      getCurrentLocation().then(loc => {
+        if (loc.lat && loc.lng) {
+          apiFetch('/api/maps/reverse-geocode', { method: 'POST', body: loc }).then(r => {
+            const el = document.getElementById('currentLocDisplay');
+            if (el && r.address) el.innerHTML = '<i data-lucide="map-pin" class="w-3 h-3"></i> ' + esc(r.address);
+            lucide.createIcons({ nodes: [el] });
+          }).catch(() => {});
+        }
+      });
+    } else {
+      const trips = await apiFetch('/api/trips/journey/' + activeJourney._id);
+      const startAddr = activeJourney.startLocation?.address || '';
+      container.innerHTML = `
+      <div class="fade-in">
+        <div class="bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl p-5 text-white mb-4 shadow-lg">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2">
+              <div class="w-3 h-3 bg-green-400 rounded-full pulse-dot"></div>
+              <span class="text-sm font-medium text-blue-100">Day Active</span>
+            </div>
+            <span class="text-sm text-blue-200">${activeJourney.date}</span>
+          </div>
+          ${startAddr ? `<p class="text-xs text-blue-200 mb-3 flex items-center gap-1"><i data-lucide="map-pin" class="w-3 h-3"></i> ${esc(startAddr)}</p>` : ''}
+          <div class="grid grid-cols-3 gap-4 text-center">
+            <div><p class="text-2xl font-bold">${activeJourney.totalTrips}</p><p class="text-xs text-blue-200">Trips</p></div>
+            <div><p class="text-2xl font-bold">${activeJourney.totalLeads}</p><p class="text-xs text-blue-200">Leads</p></div>
+            <div><p class="text-2xl font-bold">${formatTime(activeJourney.startTime)}</p><p class="text-xs text-blue-200">Started</p></div>
+          </div>
+        </div>
+
+        ${activeTrip ? `
+        <div class="bg-orange-50 border border-orange-200 rounded-2xl p-4 mb-4">
+          <div class="flex items-center justify-between mb-1">
+            <div class="flex items-center gap-2">
+              <div class="w-2.5 h-2.5 bg-orange-500 rounded-full pulse-dot"></div>
+              <span class="text-sm font-semibold text-orange-800">Trip #${activeTrip.sequence} Active</span>
+            </div>
+            <span class="text-xs text-orange-600">${formatTime(activeTrip.startTime)}</span>
+          </div>
+          ${activeTrip.purpose ? `<p class="text-sm text-orange-700 mb-1">${esc(activeTrip.purpose)}</p>` : ''}
+          ${activeTrip.startLocation?.address ? `<p class="text-xs text-orange-500 mb-3 flex items-center gap-1"><i data-lucide="map-pin" class="w-3 h-3"></i> ${esc(activeTrip.startLocation.address)}</p>` : ''}
+          <div class="flex gap-2">
+            <button onclick="addLeadModal()" class="flex-1 bg-green-600 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-green-700 flex items-center justify-center gap-1.5">
+              <i data-lucide="user-plus" class="w-4 h-4"></i> Add Lead
+            </button>
+            <button onclick="endTrip('${activeTrip._id}')" id="endTripBtn" class="flex-1 bg-orange-600 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-orange-700 flex items-center justify-center gap-1.5">
+              <i data-lucide="square" class="w-4 h-4"></i> End Trip
+            </button>
+          </div>
+        </div>
+        ` : `
+        <button onclick="startTripModal()" class="w-full bg-green-600 text-white py-3.5 rounded-2xl font-bold text-base hover:bg-green-700 transition flex items-center justify-center gap-2 shadow-lg shadow-green-200 mb-4">
+          <i data-lucide="map-pin" class="w-5 h-5"></i> Start New Trip
+        </button>
+        `}
+
+        ${trips.length > 0 ? `
+        <div class="mb-4">
+          <h3 class="font-semibold text-gray-900 mb-3 text-sm">Today's Trips</h3>
+          <div class="space-y-2">
+            ${trips.map(t => `<div class="bg-white rounded-xl border border-gray-200 p-3.5 touch-card">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-bold text-gray-400">#${t.sequence}</span>
+                  <span class="font-medium text-gray-900 text-sm">${esc(t.purpose || 'Trip')}</span>
+                  ${t.status === 'active' ? '<span class="w-2 h-2 bg-orange-500 rounded-full pulse-dot"></span>' : ''}
+                </div>
+                <div class="flex items-center gap-2">
+                  ${t.distanceKm ? `<span class="text-xs font-semibold text-blue-600">${t.distanceKm} km</span>` : ''}
+                  ${t.status === 'completed' ? '<i data-lucide="check-circle" class="w-5 h-5 text-green-500"></i>' : '<i data-lucide="loader" class="w-5 h-5 text-orange-500"></i>'}
+                </div>
+              </div>
+              <div class="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                <span>${formatTime(t.startTime)}${t.endTime ? ' - ' + formatTime(t.endTime) : ''}</span>
+                <span>${t.leadsCount} leads</span>
+                ${t.durationMinutes ? `<span>${Math.round(t.durationMinutes)} min</span>` : ''}
+              </div>
+              ${t.startLocation?.address ? `<p class="text-[10px] text-gray-400 mt-1 truncate"><i data-lucide="map-pin" class="w-2.5 h-2.5 inline"></i> ${esc(t.startLocation.address)}${t.endLocation?.address ? ' → ' + esc(t.endLocation.address) : ''}</p>` : ''}
+            </div>`).join('')}
+          </div>
+        </div>` : ''}
+
+        <button onclick="endJourney('${activeJourney._id}')" id="endDayBtn" class="w-full bg-red-100 text-red-700 py-3 rounded-2xl font-semibold text-sm hover:bg-red-200 transition flex items-center justify-center gap-2">
+          <i data-lucide="octagon" class="w-4 h-4"></i> End Day
+        </button>
+      </div>`;
+    }
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+window.startJourney = async () => {
+  const btn = document.getElementById('startDayBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<div class="spinner" style="width:24px;height:24px;border-width:3px;border-top-color:white;"></div><span class="ml-2">Getting location...</span>'; }
+  try {
+    const loc = await getCurrentLocation();
+    if (btn) btn.innerHTML = '<div class="spinner" style="width:24px;height:24px;border-width:3px;border-top-color:white;"></div><span class="ml-2">Starting day...</span>';
+    const journey = await apiFetch('/api/journeys/start', { method: 'POST', body: loc });
+    showToast(journey.startLocation?.address ? 'Day started from ' + journey.startLocation.address.split(',')[0] : 'Day started!');
+    route();
+  } catch (err) { showToast(err.message, 'error'); if (btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="play-circle" class="w-6 h-6"></i> Start Day'; lucide.createIcons({ nodes: [btn] }); } }
+};
+
+window.startTripModal = () => {
+  showModal(`<div class="p-6"><h3 class="text-lg font-bold text-gray-900 mb-4">Start New Trip</h3>
+    <form id="startTripForm" class="space-y-4">
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Purpose / Location</label><input type="text" id="trip_purpose" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm outline-none" placeholder="e.g., Visit ABC Company" required></div>
+      <div class="flex gap-2 justify-end"><button type="button" onclick="hideModal()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button><button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">Start Trip</button></div>
+    </form></div>`);
+  document.getElementById('startTripForm').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const loc = await getCurrentLocation();
+      await apiFetch('/api/trips/start', { method: 'POST', body: { purpose: document.getElementById('trip_purpose').value, ...loc } });
+      hideModal(); showToast('Trip started!'); route();
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+};
+
+window.endTrip = async (tripId) => {
+  const btn = document.getElementById('endTripBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;border-width:2px;border-top-color:white;"></div><span class="ml-1">Calculating...</span>'; }
+  try {
+    const loc = await getCurrentLocation();
+    const result = await apiFetch(`/api/trips/${tripId}/end`, { method: 'PUT', body: { ...loc } });
+    const msg = result.distanceKm ? `Trip ended - ${result.distanceKm} km` : 'Trip ended';
+    showToast(msg); route();
+  } catch (err) { showToast(err.message, 'error'); if (btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="square" class="w-4 h-4"></i> End Trip'; lucide.createIcons({ nodes: [btn] }); } }
+};
+
+window.endJourney = async (journeyId) => {
+  if (!confirm('End your day? This will complete all active trips.')) return;
+  const btn = document.getElementById('endDayBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;border-width:2px;border-top-color:#dc2626;"></div><span class="ml-1">Calculating distance...</span>'; }
+  try {
+    const loc = await getCurrentLocation();
+    const result = await apiFetch(`/api/journeys/${journeyId}/end`, { method: 'PUT', body: loc });
+    const distMsg = result.distanceKm ? ` - Total: ${result.distanceKm} km` : (result.totalTripDistance ? ` - Trips total: ${result.totalTripDistance} km` : '');
+    showToast('Day ended' + distMsg); route();
+  } catch (err) { showToast(err.message, 'error'); if (btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="octagon" class="w-4 h-4"></i> End Day'; lucide.createIcons({ nodes: [btn] }); } }
+};
+
+window.addLeadModal = () => {
+  showModal(`<div class="p-6"><h3 class="text-lg font-bold text-gray-900 mb-4">Add Lead</h3>
+    <form id="addLeadForm" class="space-y-4">
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Contact Name <span class="text-red-500">*</span></label><input type="text" id="lead_name" required class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm outline-none" placeholder="Full name"></div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Phone</label><input type="tel" id="lead_phone" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm outline-none" placeholder="Phone number"></div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Email</label><input type="email" id="lead_email" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm outline-none" placeholder="Email"></div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Company</label><input type="text" id="lead_company" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm outline-none" placeholder="Company name"></div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Designation</label><input type="text" id="lead_designation" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm outline-none" placeholder="Title/role"></div>
+      </div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Product Interest</label><input type="text" id="lead_product" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm outline-none" placeholder="What are they interested in?"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Follow-up Date</label><input type="date" id="lead_followup" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm outline-none"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Notes</label><textarea id="lead_notes" rows="2" class="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm outline-none resize-none" placeholder="Additional notes..."></textarea></div>
+      <div class="flex gap-2 justify-end"><button type="button" onclick="hideModal()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button><button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">Save Lead</button></div>
+    </form></div>`);
+  document.getElementById('addLeadForm').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const loc = await getCurrentLocation();
+      await apiFetch('/api/leads', { method: 'POST', body: {
+        contactName: document.getElementById('lead_name').value, phone: document.getElementById('lead_phone').value,
+        email: document.getElementById('lead_email').value, company: document.getElementById('lead_company').value,
+        designation: document.getElementById('lead_designation').value, productInterest: document.getElementById('lead_product').value,
+        followUpDate: document.getElementById('lead_followup').value, notes: document.getElementById('lead_notes').value,
+        ...loc,
+      }});
+      hideModal(); showToast('Lead added!'); route();
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+};
+
+
+// ===== JOURNEY HISTORY =====
+async function renderJourneyHistory(container) {
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const journeys = await apiFetch('/api/journeys/mine');
+    container.innerHTML = `
+    <div class="mb-6"><h2 class="text-xl font-bold text-gray-900">Journey History</h2><p class="text-gray-500 text-sm mt-1">${journeys.length} days tracked</p></div>
+    ${journeys.length === 0 ? '<div class="bg-white rounded-xl border border-gray-200 text-center py-16"><i data-lucide="map" class="w-12 h-12 text-gray-300 mx-auto mb-3"></i><p class="text-gray-500">No journeys yet</p></div>' : `
+    <div class="space-y-3">
+      ${journeys.map(j => `<div class="bg-white rounded-xl border border-gray-200 p-4 touch-card cursor-pointer" onclick="location.hash='#journey/${j._id}'">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-semibold text-gray-900">${j.date}</span>
+          <div class="flex items-center gap-2">
+            ${j.distanceKm ? `<span class="text-xs font-semibold text-blue-600">${j.distanceKm} km</span>` : (j.totalTripDistance ? `<span class="text-xs font-semibold text-blue-600">${j.totalTripDistance} km</span>` : '')}
+            <span class="text-xs px-2 py-0.5 rounded ${j.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}">${j.status === 'active' ? 'Active' : 'Completed'}</span>
+          </div>
+        </div>
+        ${j.startLocation?.address ? `<p class="text-xs text-gray-400 mb-2 truncate"><i data-lucide="map-pin" class="w-3 h-3 inline"></i> ${esc(j.startLocation.address)}${j.endLocation?.address ? ' → ' + esc(j.endLocation.address) : ''}</p>` : ''}
+        <div class="flex items-center gap-4 text-sm text-gray-600">
+          <span class="flex items-center gap-1"><i data-lucide="route" class="w-3.5 h-3.5"></i> ${j.totalTrips} trips</span>
+          <span class="flex items-center gap-1"><i data-lucide="users" class="w-3.5 h-3.5"></i> ${j.totalLeads} leads</span>
+          <span class="flex items-center gap-1"><i data-lucide="trophy" class="w-3.5 h-3.5"></i> ${j.totalConverted || 0} converted</span>
+          ${j.durationMinutes ? `<span class="flex items-center gap-1"><i data-lucide="clock" class="w-3.5 h-3.5"></i> ${Math.round(j.durationMinutes)} min</span>` : ''}
+        </div>
+      </div>`).join('')}
+    </div>`}`;
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+
+// ===== MY LEADS =====
+async function renderMyLeads(container) {
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const leads = await apiFetch('/api/leads/mine');
+    container.innerHTML = `
+    <div class="flex items-center justify-between mb-6">
+      <div><h2 class="text-xl font-bold text-gray-900">My Leads</h2><p class="text-gray-500 text-sm mt-1">${leads.length} total</p></div>
+      <select id="leadFilter" onchange="filterLeads()" class="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none">
+        <option value="">All</option>${LEAD_STATUSES.map(s => `<option value="${s}">${s.replace('_',' ').replace(/\b\w/g, c => c.toUpperCase())}</option>`).join('')}
+      </select>
+    </div>
+    ${leads.length === 0 ? '<div class="bg-white rounded-xl border border-gray-200 text-center py-16"><i data-lucide="users" class="w-12 h-12 text-gray-300 mx-auto mb-3"></i><p class="text-gray-500">No leads yet</p></div>' : `
+    <div class="space-y-3">
+      ${leads.map(l => `<div class="bg-white rounded-xl border border-gray-200 p-4 touch-card cursor-pointer lead-row" data-status="${l.status}" onclick="location.hash='#lead/${l._id}'">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="font-medium text-gray-900">${esc(l.contactName)}</span>
+          ${leadStatusBadge(l.status)}
+        </div>
+        <div class="text-sm text-gray-600 space-y-0.5">
+          ${l.company ? `<p class="flex items-center gap-1"><i data-lucide="building" class="w-3.5 h-3.5"></i> ${esc(l.company)}</p>` : ''}
+          ${l.phone ? `<p class="flex items-center gap-1"><i data-lucide="phone" class="w-3.5 h-3.5"></i> ${esc(l.phone)}</p>` : ''}
+          ${l.followUpDate ? `<p class="flex items-center gap-1"><i data-lucide="calendar" class="w-3.5 h-3.5"></i> Follow-up: ${l.followUpDate}</p>` : ''}
+        </div>
+      </div>`).join('')}
+    </div>`}`;
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+window.filterLeads = () => {
+  const filter = document.getElementById('leadFilter').value;
+  document.querySelectorAll('.lead-row').forEach(row => { row.style.display = (!filter || row.dataset.status === filter) ? '' : 'none'; });
+};
+
+
+// ===== LEAD DETAIL =====
+async function renderLeadDetail(container, id) {
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const lead = await apiFetch('/api/leads/' + id);
+    const canEdit = lead.userId === (state.user?._id || state.user?.id) || isOps();
+    container.innerHTML = `
+    <div class="max-w-2xl mx-auto fade-in">
+      <div class="flex items-center gap-2 mb-6">
+        <button onclick="history.back()" class="p-2 rounded-lg hover:bg-gray-100"><i data-lucide="arrow-left" class="w-5 h-5 text-gray-600"></i></button>
+        <div class="flex-1"><h2 class="text-xl font-bold text-gray-900">${esc(lead.contactName)}</h2><p class="text-gray-500 text-sm">${esc(lead.company || '-')}</p></div>
+        ${leadStatusBadge(lead.status)}
+      </div>
+      <div class="bg-white rounded-xl border border-gray-200 p-5 mb-4">
+        <div class="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
+          <div><span class="text-gray-500 block mb-0.5">Phone</span><span class="font-medium text-gray-900">${lead.phone ? `<a href="tel:${lead.phone}" class="text-blue-600 hover:underline">${esc(lead.phone)}</a>` : '-'}</span></div>
+          <div><span class="text-gray-500 block mb-0.5">Email</span><span class="font-medium text-gray-900">${lead.email ? `<a href="mailto:${lead.email}" class="text-blue-600 hover:underline">${esc(lead.email)}</a>` : '-'}</span></div>
+          <div><span class="text-gray-500 block mb-0.5">Designation</span><span class="font-medium text-gray-900">${esc(lead.designation || '-')}</span></div>
+          <div><span class="text-gray-500 block mb-0.5">Product Interest</span><span class="font-medium text-gray-900">${esc(lead.productInterest || '-')}</span></div>
+          <div><span class="text-gray-500 block mb-0.5">Added By</span><span class="font-medium text-gray-900">${esc(lead.userName || '-')}</span></div>
+          <div><span class="text-gray-500 block mb-0.5">Follow-up</span><span class="font-medium text-gray-900">${lead.followUpDate || '-'}</span></div>
+          <div><span class="text-gray-500 block mb-0.5">Created</span><span class="font-medium text-gray-900">${formatDate(lead.createdAt)}</span></div>
+          ${lead.location?.address ? `<div class="col-span-2"><span class="text-gray-500 block mb-0.5">Location</span><span class="font-medium text-gray-900 text-xs">${esc(lead.location.address)}</span></div>` : ''}
+          ${lead.convertedByName ? `<div><span class="text-gray-500 block mb-0.5">Converted By</span><span class="font-medium text-green-700">${esc(lead.convertedByName)} on ${formatDate(lead.convertedDate)}</span></div>` : ''}
+        </div>
+        ${lead.notes ? `<div class="mt-4 pt-4 border-t border-gray-100"><span class="text-gray-500 text-sm block mb-1">Notes</span><p class="text-sm text-gray-900">${esc(lead.notes)}</p></div>` : ''}
+        ${lead.conversionNotes ? `<div class="mt-3 p-3 bg-green-50 rounded-lg"><span class="text-green-700 text-sm font-medium block mb-0.5">Conversion Notes</span><p class="text-sm text-green-600">${esc(lead.conversionNotes)}</p></div>` : ''}
+      </div>
+      ${canEdit && lead.status !== 'converted' ? `
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <h3 class="font-semibold text-gray-900 mb-3">Update Status</h3>
+        <div class="flex flex-wrap gap-2">
+          ${LEAD_STATUSES.filter(s => s !== lead.status).map(s => `
+            <button onclick="updateLeadStatus('${lead._id}', '${s}')" class="px-4 py-2 rounded-xl text-sm font-medium border ${s === 'converted' ? 'border-green-300 bg-green-50 text-green-700 hover:bg-green-100' : s === 'lost' ? 'border-red-300 bg-red-50 text-red-700 hover:bg-red-100' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'} transition">
+              ${s.replace('_',' ').replace(/\b\w/g, c => c.toUpperCase())}
+            </button>
+          `).join('')}
+        </div>
+      </div>` : ''}
+    </div>`;
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+window.updateLeadStatus = async (id, status) => {
+  if (status === 'converted') {
+    showModal(`<div class="p-6"><h3 class="text-lg font-bold text-gray-900 mb-4">Mark as Converted</h3>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Conversion Notes</label><textarea id="conversionNotes" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none resize-none" placeholder="Deal details, value, etc."></textarea></div>
+      <div class="flex gap-2 mt-5 justify-end"><button onclick="hideModal()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button><button onclick="confirmConvert('${id}')" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">Confirm</button></div></div>`);
+    return;
+  }
+  try { await apiFetch(`/api/leads/${id}`, { method: 'PUT', body: { status } }); showToast('Lead updated'); route(); }
+  catch (err) { showToast(err.message, 'error'); }
+};
+
+window.confirmConvert = async (id) => {
+  try {
+    await apiFetch(`/api/leads/${id}`, { method: 'PUT', body: { status: 'converted', conversionNotes: document.getElementById('conversionNotes')?.value || '' } });
+    hideModal(); showToast('Lead converted!'); route();
+  } catch (err) { showToast(err.message, 'error'); }
+};
+
+
+// ===== JOURNEY DETAIL =====
+async function renderJourneyDetail(container, id) {
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const data = await apiFetch('/api/journeys/' + id);
+    const { journey, trips, leads } = data;
+    container.innerHTML = `
+    <div class="max-w-3xl mx-auto fade-in">
+      <div class="flex items-center gap-2 mb-6">
+        <button onclick="history.back()" class="p-2 rounded-lg hover:bg-gray-100"><i data-lucide="arrow-left" class="w-5 h-5 text-gray-600"></i></button>
+        <div class="flex-1"><h2 class="text-xl font-bold text-gray-900">Journey - ${journey.date}</h2><p class="text-gray-500 text-sm">${esc(journey.userName)}</p></div>
+        <span class="text-xs px-2 py-0.5 rounded ${journey.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}">${journey.status}</span>
+      </div>
+      ${journey.startLocation?.address ? `
+      <div class="bg-white rounded-xl border border-gray-200 p-4 mb-4">
+        <div class="flex items-center gap-2 text-sm">
+          <i data-lucide="map-pin" class="w-4 h-4 text-green-600 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <p class="text-gray-500 text-xs">Start</p>
+            <p class="text-gray-900 text-sm truncate">${esc(journey.startLocation.address)}</p>
+          </div>
+          ${journey.endLocation?.address ? `
+          <i data-lucide="arrow-right" class="w-4 h-4 text-gray-400 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <p class="text-gray-500 text-xs">End</p>
+            <p class="text-gray-900 text-sm truncate">${esc(journey.endLocation.address)}</p>
+          </div>` : ''}
+        </div>
+      </div>` : ''}
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+        ${statCard('Trips', journey.totalTrips, 'route', 'blue')}
+        ${statCard('Leads', journey.totalLeads, 'users', 'green')}
+        ${statCard('Distance', journey.distanceKm ? journey.distanceKm + ' km' : (journey.totalTripDistance ? journey.totalTripDistance + ' km' : '-'), 'navigation', 'cyan')}
+        ${statCard('Duration', journey.durationMinutes ? Math.round(journey.durationMinutes) + ' min' : (journey.endTime ? Math.round((new Date(journey.endTime) - new Date(journey.startTime))/60000) + ' min' : 'Active'), 'clock', 'orange')}
+      </div>
+      ${trips.length > 0 ? `
+      <div class="bg-white rounded-xl border border-gray-200 p-5 mb-4">
+        <h3 class="font-semibold text-gray-900 mb-3">Trips</h3>
+        <div class="space-y-3">
+          ${trips.map(t => `<div class="flex items-start gap-3 pb-3 border-b border-gray-100 last:border-0">
+            <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0"><span class="text-blue-700 text-sm font-bold">${t.sequence}</span></div>
+            <div class="flex-1">
+              <div class="flex items-center justify-between">
+                <p class="font-medium text-gray-900 text-sm">${esc(t.purpose || 'Trip #' + t.sequence)}</p>
+                ${t.distanceKm ? `<span class="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">${t.distanceKm} km</span>` : ''}
+              </div>
+              <p class="text-xs text-gray-500 mt-0.5">${formatTime(t.startTime)}${t.endTime ? ' - ' + formatTime(t.endTime) : ' (active)'} &middot; ${t.leadsCount} leads${t.durationMinutes ? ' &middot; ' + Math.round(t.durationMinutes) + ' min' : ''}</p>
+              ${t.startLocation?.address ? `<p class="text-[10px] text-gray-400 mt-1"><i data-lucide="map-pin" class="w-2.5 h-2.5 inline"></i> ${esc(t.startLocation.address)}${t.endLocation?.address ? ' → ' + esc(t.endLocation.address) : ''}</p>` : ''}
+              ${t.notes ? `<p class="text-xs text-gray-600 mt-1">${esc(t.notes)}</p>` : ''}
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>` : ''}
+      ${leads.length > 0 ? `
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <h3 class="font-semibold text-gray-900 mb-3">Leads Captured</h3>
+        <div class="space-y-2">
+          ${leads.map(l => `<div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100" onclick="location.hash='#lead/${l._id}'">
+            <div><p class="font-medium text-gray-900 text-sm">${esc(l.contactName)}</p><p class="text-xs text-gray-500">${esc(l.company || '-')} &middot; ${esc(l.phone || '-')}</p></div>
+            ${leadStatusBadge(l.status)}
+          </div>`).join('')}
+        </div>
+      </div>` : ''}
+    </div>`;
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+
+// ===== OPS DASHBOARD =====
+async function renderOpsDashboard(container) {
+  if (!isOps()) { container.innerHTML = '<p class="text-gray-500 p-4">Operations access required</p>'; return; }
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const stats = await apiFetch('/api/journey-stats');
+    container.innerHTML = `
+    <div class="mb-6"><h2 class="text-2xl font-bold text-gray-900">Operations Dashboard</h2><p class="text-gray-500 text-sm mt-1">Journey & leads overview</p></div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      ${statCard('Active Today', stats.todayJourneys, 'compass', 'blue', stats.activeJourneys + ' in field')}
+      ${statCard('Total Trips', stats.totalTrips, 'route', 'green')}
+      ${statCard('Total Leads', stats.totalLeads, 'users', 'purple')}
+      ${statCard('Converted', stats.convertedLeads, 'trophy', 'orange', stats.totalLeads > 0 ? Math.round(stats.convertedLeads/stats.totalLeads*100) + '%' : '0%')}
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <h3 class="font-semibold text-gray-900 mb-3">By User</h3>
+        ${stats.byUser.length === 0 ? '<p class="text-gray-400 text-sm">No data</p>' : `
+        <div class="space-y-2">
+          ${stats.byUser.map(u => `<div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+            <div><p class="font-medium text-gray-900 text-sm">${esc(u._id)}</p><p class="text-xs text-gray-500">${u.journeys} days &middot; ${u.trips} trips</p></div>
+            <div class="text-right"><p class="font-medium text-gray-900 text-sm">${u.leads} leads</p><p class="text-xs text-green-600">${u.converted} converted</p></div>
+          </div>`).join('')}
+        </div>`}
+      </div>
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <h3 class="font-semibold text-gray-900 mb-3">Leads by Status</h3>
+        ${stats.leadsByStatus.length === 0 ? '<p class="text-gray-400 text-sm">No data</p>' : `
+        <div class="space-y-2">
+          ${stats.leadsByStatus.map(s => `<div class="flex items-center justify-between p-2">
+            ${leadStatusBadge(s._id)}<span class="font-bold text-gray-900">${s.count}</span>
+          </div>`).join('')}
+        </div>`}
+      </div>
+    </div>
+    ${stats.recentJourneys.length > 0 ? `
+    <div class="bg-white rounded-xl border border-gray-200 p-5">
+      <div class="flex items-center justify-between mb-3"><h3 class="font-semibold text-gray-900">Recent Journeys</h3><a href="#all-journeys" class="text-blue-600 text-sm hover:underline">View All</a></div>
+      <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="border-b border-gray-100 text-left text-gray-500">
+        <th class="pb-3 font-medium">User</th><th class="pb-3 font-medium">Date</th><th class="pb-3 font-medium">Trips</th><th class="pb-3 font-medium">Leads</th><th class="pb-3 font-medium">Status</th><th class="pb-3"></th>
+      </tr></thead><tbody>
+        ${stats.recentJourneys.map(j => `<tr class="border-b border-gray-50 hover:bg-gray-50 cursor-pointer" onclick="location.hash='#journey/${j._id}'">
+          <td class="py-3 font-medium text-gray-900">${esc(j.userName)}</td>
+          <td class="py-3 text-gray-600">${j.date}</td>
+          <td class="py-3 text-gray-600">${j.totalTrips}</td>
+          <td class="py-3 text-gray-600">${j.totalLeads}</td>
+          <td class="py-3"><span class="text-xs px-2 py-0.5 rounded ${j.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}">${j.status}</span></td>
+          <td class="py-3"><i data-lucide="chevron-right" class="w-4 h-4 text-gray-400"></i></td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    </div>` : ''}`;
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+
+// ===== ALL JOURNEYS (Ops) =====
+async function renderAllJourneys(container) {
+  if (!isOps()) { container.innerHTML = '<p class="text-gray-500 p-4">Access denied</p>'; return; }
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const journeys = await apiFetch('/api/journeys');
+    container.innerHTML = `
+    <div class="mb-6"><h2 class="text-2xl font-bold text-gray-900">All Journeys</h2><p class="text-gray-500 text-sm mt-1">${journeys.length} total</p></div>
+    <div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
+        <th class="px-5 py-3 font-medium">User</th><th class="px-5 py-3 font-medium">Date</th><th class="px-5 py-3 font-medium">Trips</th><th class="px-5 py-3 font-medium">Leads</th><th class="px-5 py-3 font-medium">Distance</th><th class="px-5 py-3 font-medium">Status</th><th class="px-5 py-3"></th>
+      </tr></thead><tbody>
+        ${journeys.map(j => `<tr class="border-b border-gray-50 hover:bg-gray-50 cursor-pointer" onclick="location.hash='#journey/${j._id}'">
+          <td class="px-5 py-3.5 font-medium text-gray-900">${esc(j.userName)}</td>
+          <td class="px-5 py-3.5 text-gray-600">${j.date}</td>
+          <td class="px-5 py-3.5 text-gray-600">${j.totalTrips}</td>
+          <td class="px-5 py-3.5 text-gray-600">${j.totalLeads}</td>
+          <td class="px-5 py-3.5 text-blue-600 font-medium">${j.distanceKm ? j.distanceKm + ' km' : (j.totalTripDistance ? j.totalTripDistance + ' km' : '-')}</td>
+          <td class="px-5 py-3.5"><span class="text-xs px-2 py-0.5 rounded ${j.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}">${j.status}</span></td>
+          <td class="px-5 py-3.5"><i data-lucide="chevron-right" class="w-4 h-4 text-gray-400"></i></td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    </div>`;
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+
+// ===== ALL LEADS (Ops) =====
+async function renderAllLeads(container) {
+  if (!isOps()) { container.innerHTML = '<p class="text-gray-500 p-4">Access denied</p>'; return; }
+  container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner"></div></div>';
+  try {
+    const leads = await apiFetch('/api/leads');
+    container.innerHTML = `
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-3">
+      <div><h2 class="text-2xl font-bold text-gray-900">All Leads</h2><p class="text-gray-500 text-sm mt-1">${leads.length} total</p></div>
+      <select id="allLeadFilter" onchange="filterAllLeads()" class="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none">
+        <option value="">All Status</option>${LEAD_STATUSES.map(s => `<option value="${s}">${s.replace('_',' ').replace(/\b\w/g, c => c.toUpperCase())}</option>`).join('')}
+      </select>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="bg-gray-50 border-b border-gray-200 text-left text-gray-500">
+        <th class="px-5 py-3 font-medium">Contact</th><th class="px-5 py-3 font-medium">Company</th><th class="px-5 py-3 font-medium">Phone</th><th class="px-5 py-3 font-medium">By</th><th class="px-5 py-3 font-medium">Status</th><th class="px-5 py-3 font-medium">Date</th><th class="px-5 py-3"></th>
+      </tr></thead><tbody>
+        ${leads.map(l => `<tr class="border-b border-gray-50 hover:bg-gray-50 cursor-pointer all-lead-row" data-status="${l.status}" onclick="location.hash='#lead/${l._id}'">
+          <td class="px-5 py-3.5 font-medium text-gray-900">${esc(l.contactName)}</td>
+          <td class="px-5 py-3.5 text-gray-600">${esc(l.company || '-')}</td>
+          <td class="px-5 py-3.5 text-gray-600">${esc(l.phone || '-')}</td>
+          <td class="px-5 py-3.5 text-gray-600">${esc(l.userName || '-')}</td>
+          <td class="px-5 py-3.5">${leadStatusBadge(l.status)}</td>
+          <td class="px-5 py-3.5 text-gray-500">${formatDate(l.createdAt)}</td>
+          <td class="px-5 py-3.5"><i data-lucide="chevron-right" class="w-4 h-4 text-gray-400"></i></td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    </div>`;
+    lucide.createIcons();
+  } catch (err) { container.innerHTML = `<p class="text-red-500 p-4">${esc(err.message)}</p>`; }
+}
+
+window.filterAllLeads = () => {
+  const filter = document.getElementById('allLeadFilter').value;
+  document.querySelectorAll('.all-lead-row').forEach(row => { row.style.display = (!filter || row.dataset.status === filter) ? '' : 'none'; });
+};
+
+
+function esc(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = String(str);
+  return div.innerHTML;
+}
+
+init();
+</script>
+</body>
+</html>
